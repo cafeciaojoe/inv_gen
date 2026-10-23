@@ -10,3 +10,5 @@
       month, per client and in total, plus rolling turnover
 - [ ] Clean up the preview
 - [ ] Think through partial failure: what if PDF 3 of 4 fails during commit
+- [ ] Also write `Batch.logged_only` rows to the ledger as work rows with an empty
+      `invoice_no` and today as `invoice_date`

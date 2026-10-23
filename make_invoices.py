@@ -24,8 +24,8 @@ import re
 import sys
 import tomllib
 from dataclasses import dataclass
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
 # WeasyPrint draws text with pango from Homebrew, but a Python installed by uv
@@ -759,9 +759,10 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
         key = (e.date, e.project, e.hours, e.task)
         batch.setdefault(key, []).append(e)
         if key in already:
+            where = (f"billed, on {already[key]}" if already[key]
+                     else "logged, as fixed-price work with nothing charged that month")
             errors.append(row_error(
-                "timesheet.txt", f"this line may already be billed, on {already[key]}",
-                e.line, None,
+                "timesheet.txt", f"this line may already be {where}", e.line,
             ) + f"\n  {retell}")
     for same in batch.values():
         if len(same) > 1:
@@ -808,6 +809,15 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
                 + "\n  Make every row of one booked week carry exactly the same tag."
             )
 
+    # New numbers continue from the ledger's highest, so every number in it
+    # has to be readable as prefix + digits.
+    pattern = re.compile(re.escape(config.number_prefix) + r"\d+")
+    odd = sorted({r.invoice_no for r in (*ledger.work, *ledger.charges)
+                  if r.invoice_no and not pattern.fullmatch(r.invoice_no)})
+    for number in odd:
+        errors.append(f'ledger.csv — invoice number "{number}" is not number_prefix '
+                      f'"{config.number_prefix}" followed by digits')
+
     # Per billed client: a rate for its tier, a way to pay, and today's rate.
     clients = sorted({c.name: c for _, c in billed}.values(), key=lambda c: c.name)
     for c in clients:
@@ -840,6 +850,225 @@ def check_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
     return None if errors else inputs
 
 
+# ---- Charges ----------------------------------------------------------------
+
+GST_RATE = Decimal("0.10")  # unchanged since GST began in 2000
+CENT = Decimal("0.01")
+_LINE_ORDER = {"week": 0, "day": 1, "hour": 2, "fixed": 3}  # within one date
+
+
+def cents(amount: Decimal) -> Decimal:
+    """Round to the cent, halves up, as the ATO wants.
+
+    Python's default is banker's rounding, which sends an exact half to the
+    even cent instead. Getting this wrong is silent, so every rounding in the
+    script goes through here.
+    """
+    return amount.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def fmt_hours(hours: Decimal) -> str:
+    return format(hours.normalize(), "f")  # 40, 34.5, 1.25
+
+
+def short_date(d: date) -> str:
+    return f"{d.day} {d:%b}"  # 16 Nov
+
+
+@dataclass(frozen=True)
+class Line:
+    date: date  # for ordering; a week's first day
+    unit: str  # week, day, hour or fixed
+    description: str
+    qty: Decimal
+    rate: Decimal  # in the invoice's currency
+    amount: Decimal
+    amount_aud: Decimal
+    gst: Decimal | None  # None when not registered for GST
+
+
+@dataclass(frozen=True)
+class Invoice:
+    number: str
+    client: Client
+    month: date  # first day of the month the work was done
+    date: date
+    due_date: date
+    fx_rate: Decimal  # AUD per unit of the client's currency; 1 at home
+    gst_treatment: str  # domestic, export, or unregistered
+    lines: tuple[Line, ...]
+    entries: tuple[Entry, ...]  # every row it covers, fixed-price ones included
+
+    @property
+    def work_log(self) -> tuple[Entry, ...]:
+        """The rows the client sees. Fixed-price hours are internal only."""
+        return tuple(e for e in self.entries if e.billing != "fixed price")
+
+    @property
+    def hours(self) -> Decimal:
+        return sum((e.hours for e in self.work_log), Decimal(0))
+
+    @property
+    def subtotal(self) -> Decimal:
+        return sum((line.amount for line in self.lines), Decimal(0))
+
+    @property
+    def gst(self) -> Decimal:
+        return sum((line.gst or Decimal(0) for line in self.lines), Decimal(0))
+
+    @property
+    def total(self) -> Decimal:
+        return self.subtotal + self.gst
+
+
+@dataclass(frozen=True)
+class Batch:
+    invoices: tuple[Invoice, ...]
+    # Fixed-price rows in a month where their client has nothing to charge.
+    # They are kept in the ledger as work with no invoice number.
+    logged_only: tuple[tuple[Entry, Client], ...]
+    week_report: tuple[str, ...]
+
+
+def highest_invoice_number(ledger: Ledger, prefix: str) -> int:
+    numbers = [int(r.invoice_no[len(prefix):]) for r in (*ledger.work, *ledger.charges)
+               if r.invoice_no]
+    return max(numbers, default=0)
+
+
+def charge_lines(entries: list[Entry], client: Client, card: RateCard,
+                 fx: Decimal | None, gst_registered: bool) -> list[Line]:
+    """Price one client's month. `fx` is AUD per unit of a foreign currency.
+
+    Nothing aggregates across the month: a week is one tagged block, a day
+    is one date, and a fixed price is one row carrying an amount.
+    """
+    tier = card.rates[client.tier]
+
+    def priced(day: date, unit: str, description: str, qty: Decimal, rate: Decimal) -> Line:
+        amount = cents(qty * rate)  # rounded per line, the taxable-supply rule
+        amount_aud = amount if fx is None else cents(amount * fx)
+        if not gst_registered:
+            gst = None
+        elif client.gst_treatment == "domestic":
+            gst = cents(amount * GST_RATE)
+        else:
+            gst = Decimal("0.00")
+        return Line(day, unit, description, qty, rate, amount, amount_aud, gst)
+
+    def from_card(day: date, unit: str, description: str, qty: Decimal) -> Line:
+        # The rate card is in AUD; a foreign client's rate is converted at
+        # the invoice date and rounded to the cent before multiplying.
+        rate = tier[unit] if fx is None else cents(tier[unit] / fx)
+        return priced(day, unit, description, qty, rate)
+
+    lines = []
+    weeks: dict[str, list[Entry]] = {}
+    hourly: dict[date, list[Entry]] = {}
+    for e in entries:
+        if e.billing == "week rate":
+            weeks.setdefault(e.tag, []).append(e)
+        elif e.billing == "fixed price":
+            if e.amount is not None:  # already in the client's own currency
+                lines.append(priced(e.date, "fixed", e.task, Decimal(1), e.amount))
+        else:
+            hourly.setdefault(e.date, []).append(e)
+
+    # Every row carrying one tag collapses into one week charge, however many
+    # hours or days it covers, and those rows bill nothing else.
+    for tag, rows in weeks.items():
+        lines.append(from_card(min(r.date for r in rows), "week", tag, Decimal(1)))
+
+    # Only plain hourly rows count toward a day: week and fixed-price hours
+    # are already paid for.
+    day_hours = card.block_hours["day"]
+    for day, rows in hourly.items():
+        hours = sum((r.hours for r in rows), Decimal(0))
+        label = f"{short_date(day)} — " + "; ".join(dict.fromkeys(r.task for r in rows))
+        if hours >= day_hours:
+            lines.append(from_card(day, "day", f"{label} (daily rate)", Decimal(1)))
+            hours -= day_hours
+        if hours > 0:
+            lines.append(from_card(day, "hour", f"{label} (hourly rate)", hours))
+
+    lines.sort(key=lambda line: (line.date, _LINE_ORDER[line.unit]))
+    return lines
+
+
+def week_report(entries: tuple[Entry, ...], card: RateCard) -> list[str]:
+    """One line per booked week, marked when it differs from 40 hours over 5 days.
+
+    A week's span is reported, not refused: weeks run long or short by
+    agreement. Two weeks sharing a tag show up here as double the hours.
+    """
+    nominal_hours = card.block_hours["week"]
+    nominal_days = int(nominal_hours / card.block_hours["day"])
+    weeks: dict[str, list[Entry]] = {}
+    for e in entries:
+        if e.billing == "week rate":
+            weeks.setdefault(e.tag, []).append(e)
+    def span(rows: list[Entry]) -> str:
+        return f"{short_date(min(r.date for r in rows))} to {short_date(max(r.date for r in rows))}"
+
+    width = max((len(tag) for tag in weeks), default=0)
+    span_width = max((len(span(rows)) for rows in weeks.values()), default=0)
+
+    report = []
+    for tag, rows in sorted(weeks.items(), key=lambda kv: min(r.date for r in kv[1])):
+        hours = sum((r.hours for r in rows), Decimal(0))
+        days = len({r.date for r in rows})
+        notes = []
+        if hours < nominal_hours:
+            notes.append(f"{fmt_hours(nominal_hours - hours)}h under")
+        elif hours > nominal_hours:
+            notes.append(f"{fmt_hours(hours - nominal_hours)}h over")
+        if days != nominal_days:
+            notes.append(f"{days} days worked")
+        text = f"  {'!' if notes else ' '} {tag:<{width}}  {fmt_hours(hours):>6}h  "
+        if notes:
+            text += f"{span(rows):<{span_width}}   <- " + ", ".join(notes)
+        else:
+            text += span(rows)
+        report.append(text)
+    return report
+
+
+def compute(inputs: Inputs) -> Batch:
+    """Cut the checked inputs into invoices: one per client per work month."""
+    config, card = inputs.config, inputs.rates
+    clients = {c.name: c for c in inputs.clients}
+    owner = {p: c for c in inputs.clients for p in c.projects}
+
+    groups: dict[tuple[date, str], list[Entry]] = {}
+    for e in inputs.entries:
+        groups.setdefault((e.date.replace(day=1), owner[e.project].name), []).append(e)
+
+    # Numbered in date order: by month, then client name within a month.
+    number = highest_invoice_number(inputs.ledger, config.number_prefix)
+    invoices, logged_only = [], []
+    for month, name in sorted(groups):
+        client, entries = clients[name], groups[(month, name)]
+        home = client.currency == config.home_currency
+        fx = None if home else config.fx[client.currency].rate
+        lines = charge_lines(entries, client, card, fx, config.gst_registered)
+        if not lines:
+            logged_only.extend((e, client) for e in entries)
+            continue
+        number += 1
+        invoices.append(Invoice(
+            number=f"{config.number_prefix}{number:0{config.number_padding}d}",
+            client=client,
+            month=month,
+            date=config.invoice_date,
+            due_date=config.invoice_date + timedelta(days=config.terms_days),
+            fx_rate=Decimal(1) if home else fx,
+            gst_treatment=client.gst_treatment if config.gst_registered else "unregistered",
+            lines=tuple(lines),
+            entries=tuple(entries),
+        ))
+    return Batch(tuple(invoices), tuple(logged_only), tuple(week_report(inputs.entries, card)))
+
+
 NOTION_FILES = ("clients.txt", "rates.txt", "timesheet.txt")
 
 
@@ -861,7 +1090,12 @@ def run(base: Path, today: date) -> int:
     if inputs is None:
         report_errors(errors)
         return 1
-    print("make_invoices: inputs pass every check; the rest is not built yet.")
+    batch = compute(inputs)
+    for inv in batch.invoices:
+        print(f"{inv.number}  {inv.month:%b %Y}  {inv.client.name:<28} "
+              f"{inv.client.currency} {inv.total:>10,.2f}")
+    print("\n".join(batch.week_report))
+    print("make_invoices: charges computed; rendering is not built yet.")
     return 1
 
 

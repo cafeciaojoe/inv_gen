@@ -62,6 +62,16 @@ def test_line_already_in_the_ledger(folder):
                             "  | September 7, 2026 | 2 | Lantern concept sketches |")
 
 
+def test_line_logged_without_an_invoice(folder):
+    folder.append("ledger.csv",
+                  "work,,2026-12-11,Northside Makers Trust,2026-12-02,7,Tool wall revisions,"
+                  "Tool Wall,fixed price," + LEDGER_TAIL + "\n")
+    assert only_error(folder).startswith(
+        "timesheet.txt — this line may already be logged, as fixed-price work with nothing "
+        "charged that month\n  | December 2, 2026 |"
+    )
+
+
 # ---- Week tags --------------------------------------------------------------
 
 NOV_6_WEEK = "| November 6, 2026 | 5 | Diffuser fitting | Stage Lantern | week rate |"
