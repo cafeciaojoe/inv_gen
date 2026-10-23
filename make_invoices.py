@@ -42,6 +42,7 @@ os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = os.pathsep.join(
 
 try:
     import jinja2
+    import markupsafe  # comes with jinja2
     import weasyprint
 except OSError as exc:
     sys.exit(
@@ -843,8 +844,12 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
 
 def check_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
     """Load everything, then compare the files with each other. None on any error."""
+    for name in TEMPLATE_FILES:
+        if not (base / name).is_file():
+            errors.append(f"{name} — not found in {base}. Copy the template/ folder in "
+                          "beside make_invoices.py.")
     inputs = load_inputs(base, today, errors)
-    if inputs is None:
+    if inputs is None or errors:
         return None
     validate(inputs, errors)
     return None if errors else inputs
@@ -1067,6 +1072,79 @@ def compute(inputs: Inputs) -> Batch:
             entries=tuple(entries),
         ))
     return Batch(tuple(invoices), tuple(logged_only), tuple(week_report(inputs.entries, card)))
+
+
+# ---- PDFs -------------------------------------------------------------------
+
+TEMPLATE_FILES = ("template/invoice.html", "template/invoice.css")
+
+
+def long_date(d: date) -> str:
+    return f"{d.day} {d:%B %Y}"  # 11 December 2026
+
+
+def _money(value) -> str:
+    return f"{Decimal(value):,.2f}"
+
+
+def _lines(text: str):
+    """A multi-line config value as HTML lines, escaped before the <br>s go in."""
+    return markupsafe.Markup("<br>").join(text.strip().splitlines())
+
+
+def template_env(base: Path) -> jinja2.Environment:
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(base / "template"),
+        autoescape=True,  # task text like "R&D" must reach the PDF intact
+    )
+    env.filters["money"] = _money
+    env.filters["lines"] = _lines
+    return env
+
+
+def invoice_context(inv: Invoice, config: Config, draft: bool) -> dict:
+    """Everything template/invoice.html reads, by the names it uses."""
+    client = inv.client
+    return {
+        "draft": draft,
+        "business": config.raw["business"],
+        "tax": {"gst_registered": config.gst_registered,
+                "abn": config.raw["tax"].get("abn"), "gst_rate": GST_RATE},
+        "invoice": {"number": inv.number, "date": long_date(inv.date),
+                    "due_date": long_date(inv.due_date), "period": f"{inv.month:%B %Y}"},
+        "client": {"name": client.name, "care_of": client.care_of, "address": client.address,
+                   "email": client.email, "reference": client.reference,
+                   "currency": client.currency, "gst_treatment": client.gst_treatment},
+        "charges": [{"description": l.description, "qty": fmt_hours(l.qty),
+                     "rate": l.rate, "amount": l.amount} for l in inv.lines],
+        "totals": {"subtotal": inv.subtotal, "gst": inv.gst, "total": inv.total,
+                   "hours": fmt_hours(inv.hours)},
+        "pay": config.payment[client.currency],
+        "payment": {"note": config.payment_note},
+        "terms_days": config.terms_days,
+        # Week and hourly rows only: fixed-price hours never reach the client.
+        "work": [{"date": f"{e.date.day} {e.date:%b %Y}", "project": e.project,
+                  "task": e.task, "hours": fmt_hours(e.hours)}
+                 for e in sorted(inv.work_log, key=lambda e: e.date)],
+    }
+
+
+def render_html(env: jinja2.Environment, inv: Invoice, config: Config, draft: bool) -> str:
+    return env.get_template("invoice.html").render(invoice_context(inv, config, draft))
+
+
+def write_pdf(base: Path, env: jinja2.Environment, inv: Invoice, config: Config,
+              draft: bool, path: Path) -> None:
+    """Render one invoice to `path`, refusing to replace a file already there.
+
+    Invoice numbers come from the ledger's high-water mark, so an existing
+    file means something is wrong upstream, and overwriting it would hide that.
+    """
+    html = render_html(env, inv, config, draft)
+    pdf = weasyprint.HTML(string=html, base_url=str(base / "template")).write_pdf()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "xb") as f:  # x: fail if it exists, atomically
+        f.write(pdf)
 
 
 NOTION_FILES = ("clients.txt", "rates.txt", "timesheet.txt")

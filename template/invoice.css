@@ -180,6 +180,34 @@ table.paydetails td {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Draft marking -------------------------------------------------- */
+
+/* position: fixed repeats on every page in WeasyPrint, so a multi-page
+   draft is marked throughout. It sits above the content and is grey, not
+   coloured, so it survives greyscale printing. */
+.watermark {
+  position: fixed;
+  top: 95mm;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 130pt;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(0, 0, 0, 0.09);
+  transform: rotate(-32deg);
+  z-index: 10;
+}
+
+h2.draft { color: #b3261e; }
+.draftnote {
+  color: #b3261e;
+  font-size: 8.5pt;
+  font-weight: 600;
+  text-align: right;
+  margin: -2mm 0 3mm 0;
+}
+
 /* Keep table headers repeating across page breaks. */
 thead { display: table-header-group; }
 tr { page-break-inside: avoid; }

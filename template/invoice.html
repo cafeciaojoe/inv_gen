@@ -13,7 +13,7 @@
   <header class="masthead">
     <div class="from">
       <h1>{{ business.trading_name }}</h1>
-      <p class="address">{{ business.address | trim | replace("\n", "<br>") | safe }}</p>
+      <p class="address">{{ business.address | lines }}</p>
       <p>
         {{ business.email }}{% if business.phone %}<br>{{ business.phone }}{% endif %}
         {% if tax.gst_registered and tax.abn %}<br>ABN {{ tax.abn }}{% endif %}
@@ -34,6 +34,7 @@
         <tr><th>Issued</th><td>{{ invoice.date }}</td></tr>
         <tr><th>Due</th><td>{{ invoice.due_date }}</td></tr>
         <tr><th>Period</th><td>{{ invoice.period }}</td></tr>
+        {% if client.reference %}<tr><th>Your reference</th><td>{{ client.reference }}</td></tr>{% endif %}
       </table>
     </div>
   </header>
@@ -50,7 +51,7 @@
     </p>
   </section>
 
-  {# Charge rows: the blocks the packing produced. This is what is billed. #}
+  {# Charge rows: one per invoice line. This is what is billed. #}
   <table class="charges">
     <thead>
       <tr>
@@ -122,7 +123,7 @@
           <th>Bank</th>
           <td>
             {{ pay.bank_name }}
-            {% if pay.bank_address %}<br>{{ pay.bank_address | trim | replace("\n", "<br>") | safe }}{% endif %}
+            {% if pay.bank_address %}<br>{{ pay.bank_address | lines }}{% endif %}
           </td>
         </tr>
       {% endif %}
@@ -140,8 +141,8 @@
     <table class="work">
       <thead>
         <tr>
-          <th>Date</th>
-          <th>Project</th>
+          <th class="nowrap">Date</th>
+          <th class="nowrap">Project</th>
           <th class="desc">Task</th>
           <th class="num">Hours</th>
         </tr>
@@ -150,7 +151,7 @@
         {% for row in work %}
         <tr>
           <td class="nowrap">{{ row.date }}</td>
-          <td>{{ row.project }}</td>
+          <td class="nowrap">{{ row.project }}</td>
           <td class="desc">{{ row.task }}</td>
           <td class="num">{{ row.hours }}</td>
         </tr>
