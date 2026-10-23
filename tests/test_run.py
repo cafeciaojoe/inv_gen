@@ -50,7 +50,7 @@ def committed(monkeypatch):
 def test_drafts_are_rendered_outside_the_folder_then_deleted(folder):
     prompt = Prompt()
     run_with(folder, prompt)
-    assert prompt.drafts == [f"INV-000{n}.pdf" for n in range(1, 8)]
+    assert prompt.drafts == [f"INV-000{n}.pdf" for n in range(1, 8)] + ["summary.csv"]
     assert folder.path not in prompt.preview.parents
     assert not prompt.preview.exists()
 
@@ -124,8 +124,20 @@ def test_summary_for_the_fixtures(folder, capsys):
             "  Northside Makers Trust   2 Dec      7h  Tool wall revisions\n") in out
     assert "Turnover, last 12 months: A$14,302.50 of A$75,000, including this run\n" in out
     assert "  ! " not in out.split("Turnover")[1]  # no threshold warning
-    assert f"Drafts are open in Finder: {prompt.preview}\n" in out
+    assert f"The draft invoices and summary.csv are open in Finder: {prompt.preview}\n" in out
     assert out.endswith("Discarded. Nothing was written.\n")
+
+
+def test_finder_line_matches_what_is_in_the_folder(folder, capsys):
+    header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
+    one = "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |"
+    none = "| December 10, 2026 | 2 | Tool wall touch-up | Tool Wall | fixed price |  |"
+    for row, expected in [(one, "The draft invoice and summary.csv are"),
+                          (none, "summary.csv is")]:
+        (folder.path / "timesheet.txt").write_text("\n".join(header + [row]) + "\n")
+        prompt = Prompt()
+        run_with(folder, prompt)
+        assert f"{expected} open in Finder: {prompt.preview}\n" in capsys.readouterr().out
 
 
 def test_override_date_is_flagged(folder, capsys):
@@ -151,7 +163,7 @@ def test_sections_with_nothing_in_them_are_left_out(folder, capsys):
 def turnover_line(folder, capsys, aud, day="2026-06-01"):
     folder.append("ledger.csv", LEDGER_CHARGE.format(day=day, aud=aud))
     run_with(folder, Prompt())
-    return capsys.readouterr().out.split("Turnover, ")[1].split("\n\nDrafts")[0]
+    return capsys.readouterr().out.split("Turnover, ")[1].split("\n\nThe draft")[0]
 
 
 def test_turnover_warns_from_80_percent(folder, capsys):

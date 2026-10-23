@@ -19,6 +19,7 @@ follows are in the design brief.
 """
 
 import csv
+import io
 import os
 import re
 import shutil
@@ -639,47 +640,56 @@ class LedgerCharge:
 class Ledger:
     work: tuple[LedgerWork, ...]
     charges: tuple[LedgerCharge, ...]
+    raw: bytes | None  # the file exactly as read; None before the first commit
+
+
+def parse_ledger(raw: bytes, errors: list[str]) -> Ledger:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        errors.append("ledger.csv — not UTF-8 text. Save it from Numbers as CSV (UTF-8).")
+        return Ledger((), (), raw)
+    reader = csv.reader(io.StringIO(text, newline=""))
+    header = next(reader, None)
+    if header != LEDGER_COLUMNS:
+        errors.append("ledger.csv — the header row doesn't match the columns the script "
+                      "writes:\n  " + ",".join(LEDGER_COLUMNS))
+        return Ledger((), (), raw)
+    work, charges = [], []
+    for cells in reader:
+        line = reader.line_num
+        if not any(cells):
+            continue
+        if len(cells) != len(LEDGER_COLUMNS):
+            errors.append(f"ledger.csv — line {line}: has {len(cells)} fields, "
+                          f"expected {len(LEDGER_COLUMNS)}")
+            continue
+        row = dict(zip(LEDGER_COLUMNS, cells))
+        try:
+            if row["row_type"] == "work":
+                work.append(LedgerWork(row["invoice_no"], row["client"],
+                                       date.fromisoformat(row["date"]),
+                                       Decimal(row["hours"]), row["task"], row["project"]))
+            elif row["row_type"] == "charge":
+                charges.append(LedgerCharge(row["invoice_no"],
+                                            date.fromisoformat(row["invoice_date"]),
+                                            row["client"], row["unit"], row["description"],
+                                            Decimal(row["amount_aud"])))
+            else:
+                errors.append(f'ledger.csv — line {line}: row_type "{row["row_type"]}" '
+                              f"is not work or charge")
+        except (ValueError, InvalidOperation):
+            errors.append(f"ledger.csv — line {line}: a date isn't YYYY-MM-DD or a number "
+                          f"isn't a number\n  {','.join(cells)}")
+    return Ledger(tuple(work), tuple(charges), raw)
 
 
 def load_ledger(base: Path, errors: list[str]) -> Ledger:
     try:
-        f = open(base / "ledger.csv", newline="", encoding="utf-8")
+        raw = (base / "ledger.csv").read_bytes()
     except FileNotFoundError:
-        return Ledger((), ())  # first run: created on the first commit
-    work, charges = [], []
-    with f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        if header != LEDGER_COLUMNS:
-            errors.append("ledger.csv — the header row doesn't match the columns the script "
-                          "writes:\n  " + ",".join(LEDGER_COLUMNS))
-            return Ledger((), ())
-        for cells in reader:
-            line = reader.line_num
-            if not any(cells):
-                continue
-            if len(cells) != len(LEDGER_COLUMNS):
-                errors.append(f"ledger.csv — line {line}: has {len(cells)} fields, "
-                              f"expected {len(LEDGER_COLUMNS)}")
-                continue
-            row = dict(zip(LEDGER_COLUMNS, cells))
-            try:
-                if row["row_type"] == "work":
-                    work.append(LedgerWork(row["invoice_no"], row["client"],
-                                           date.fromisoformat(row["date"]),
-                                           Decimal(row["hours"]), row["task"], row["project"]))
-                elif row["row_type"] == "charge":
-                    charges.append(LedgerCharge(row["invoice_no"],
-                                                date.fromisoformat(row["invoice_date"]),
-                                                row["client"], row["unit"], row["description"],
-                                                Decimal(row["amount_aud"])))
-                else:
-                    errors.append(f'ledger.csv — line {line}: row_type "{row["row_type"]}" '
-                                  f"is not work or charge")
-            except (ValueError, InvalidOperation):
-                errors.append(f"ledger.csv — line {line}: a date isn't YYYY-MM-DD or a number "
-                              f"isn't a number\n  {','.join(cells)}")
-    return Ledger(tuple(work), tuple(charges))
+        return Ledger((), (), None)  # first run: created on the first commit
+    return parse_ledger(raw, errors)
 
 
 # ---- All inputs -------------------------------------------------------------
@@ -1143,11 +1153,16 @@ def write_pdf(base: Path, env: jinja2.Environment, inv: Invoice, config: Config,
     Invoice numbers come from the ledger's high-water mark, so an existing
     file means something is wrong upstream, and overwriting it would hide that.
     """
-    html = render_html(env, inv, config, draft)
-    pdf = weasyprint.HTML(string=html, base_url=str(base / "template")).write_pdf()
+    pdf = render_pdf(base, env, inv, config, draft)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "xb") as f:  # x: fail if it exists, atomically
         f.write(pdf)
+
+
+def render_pdf(base: Path, env: jinja2.Environment, inv: Invoice, config: Config,
+               draft: bool) -> bytes:
+    html = render_html(env, inv, config, draft)
+    return weasyprint.HTML(string=html, base_url=str(base / "template")).write_pdf()
 
 
 # ---- Turnover and the preview summary ---------------------------------------
@@ -1216,7 +1231,9 @@ def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
             out.append(f"  ! Past {config.turnover_warn_at:.0%} of the GST registration "
                        "threshold.")
 
-    out += ["", f"Drafts are open in Finder: {preview}"]
+    drafts = {0: "summary.csv is", 1: "The draft invoice and summary.csv are"}.get(
+        len(batch.invoices), "The draft invoices and summary.csv are")
+    out += ["", f"{drafts} open in Finder: {preview}"]
     return out
 
 
@@ -1224,9 +1241,218 @@ def open_in_finder(path: Path) -> None:
     subprocess.run(["open", str(path)], check=False)
 
 
-def commit(base: Path, inputs: Inputs, batch: Batch) -> None:
-    """Keep the run: final PDFs, ledger rows, summary.csv. Built in commit-outputs."""
-    print("Commit is not built yet. Nothing was written.")
+# ---- Commit -----------------------------------------------------------------
+
+SUMMARY_COLUMNS = ["work_month", "client", "invoice", "invoiced", "hours", "amount_aud"]
+
+
+def csv_text(rows: list[list[str]]) -> str:
+    buffer = io.StringIO()
+    csv.writer(buffer, lineterminator="\n").writerows(rows)
+    return buffer.getvalue()
+
+
+def stage(path: Path, data: bytes) -> Path:
+    """Write `data` to a temporary file beside `path`, ready to os.replace() over it.
+
+    Beside, not in the system temp folder: the invoicing folder may be on
+    another drive (pCloud), and a rename only replaces a file in one step
+    within a single filesystem.
+    """
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return Path(tmp)
+
+
+def replace_atomically(path: Path, data: bytes) -> None:
+    """Write `data` to `path` so the file on disk is always the old or the new one."""
+    tmp = stage(path, data)
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def ledger_rows(batch: Batch, config: Config) -> list[list[str]]:
+    """The rows one commit appends: each invoice's work rows, then its charges."""
+    issued = config.invoice_date.isoformat()
+
+    def row(**cells: str) -> list[str]:
+        return [cells.get(column, "") for column in LEDGER_COLUMNS]
+
+    def work(e: Entry, client: Client, number: str) -> list[str]:
+        return row(row_type="work", invoice_no=number, invoice_date=issued, client=client.name,
+                   date=e.date.isoformat(), hours=fmt_hours(e.hours), task=e.task,
+                   project=e.project, billing_type=e.billing, ref=client.reference)
+
+    rows = []
+    for inv in batch.invoices:
+        home = inv.client.currency == config.home_currency
+        rows += [work(e, inv.client, inv.number) for e in inv.entries]
+        rows += [row(row_type="charge", invoice_no=inv.number, invoice_date=issued,
+                     client=inv.client.name, ref=inv.client.reference,
+                     description=l.description, unit=l.unit, qty=fmt_hours(l.qty),
+                     rate=f"{l.rate:.2f}", amount=f"{l.amount:.2f}",
+                     currency=inv.client.currency, fx_rate=str(inv.fx_rate), fx_date=issued,
+                     fx_source="" if home else config.fx_source,
+                     amount_aud=f"{l.amount_aud:.2f}", tier=inv.client.tier,
+                     gst_treatment=inv.gst_treatment,
+                     gst_amount="" if l.gst is None else f"{l.gst:.2f}")
+                 for l in inv.lines]
+    # Fixed-price work in a month with nothing to charge: kept, but not invoiced.
+    rows += [work(e, client, "") for e, client in batch.logged_only]
+    return rows
+
+
+def summary_rows(ledger: Ledger, end: date) -> list[list[str]]:
+    """summary.csv: one row per invoice, by the month the work was done.
+
+    Each invoice covers one month of work, so its work rows give the month.
+    An opening row entered by hand without work rows goes under the month it
+    was invoiced.
+    """
+    work: dict[str, list[LedgerWork]] = {}
+    for w in ledger.work:
+        work.setdefault(w.invoice_no, []).append(w)
+    charges: dict[str, list[LedgerCharge]] = {}
+    for c in ledger.charges:
+        charges.setdefault(c.invoice_no, []).append(c)
+
+    rows = []  # work month, client, invoice, invoiced, hours, amount
+    for number in sorted((set(work) | set(charges)) - {""}):
+        ws, cs = work.get(number, []), charges.get(number, [])
+        month = min(w.date for w in ws) if ws else cs[0].invoice_date
+        rows.append((f"{month:%Y-%m}", (cs or ws)[0].client, number,
+                     f"{cs[0].invoice_date:%Y-%m}" if cs else "",
+                     sum((w.hours for w in ws), Decimal(0)),
+                     sum((c.amount_aud for c in cs), Decimal(0))))
+    logged: dict[tuple[str, str], Decimal] = {}
+    for w in work.get("", []):
+        key = (f"{w.date:%Y-%m}", w.client)
+        logged[key] = logged.get(key, Decimal(0)) + w.hours
+    rows += [(month, client, "", "", hours, Decimal(0)) for (month, client), hours in logged.items()]
+    rows.sort(key=lambda r: (r[0], r[2] or "~", r[1]))  # no-invoice rows last in a month
+
+    out = [SUMMARY_COLUMNS]
+    for month in sorted({r[0] for r in rows}):
+        group = [r for r in rows if r[0] == month]
+        out += [[m, client, number, invoiced, fmt_hours(hours), f"{amount:.2f}"]
+                for m, client, number, invoiced, hours, amount in group]
+        out.append([month, "Total", "", "",
+                    fmt_hours(sum((r[4] for r in group), Decimal(0))),
+                    f"{sum((r[5] for r in group), Decimal(0)):.2f}"])
+    out.append([])
+    out.append(["", f"Turnover, 12 months to {end.isoformat()}", "", "", "",
+                f"{rolling_turnover(ledger, None, end):.2f}"])
+    return out
+
+
+def appended_ledger(inputs: Inputs, batch: Batch) -> tuple[bytes, list[list[str]]]:
+    """ledger.csv as it will be after this commit, and the rows it gains.
+
+    The existing bytes are kept exactly; the new rows only ever follow them.
+    """
+    old = inputs.ledger.raw
+    if old is None:
+        old = csv_text([LEDGER_COLUMNS]).encode()
+    elif not old.endswith(b"\n"):
+        old += b"\n"
+    rows = ledger_rows(batch, inputs.config)
+    return old + csv_text(rows).encode("utf-8"), rows
+
+
+def summary_after(inputs: Inputs, batch: Batch) -> bytes:
+    """summary.csv as it will be after this commit, built for the preview."""
+    new_ledger, _ = appended_ledger(inputs, batch)
+    rows = summary_rows(parse_ledger(new_ledger, []), inputs.config.invoice_date)
+    return csv_text(rows).encode("utf-8")
+
+
+def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str]:
+    """Keep the run: final PDFs, then the ledger, then the reviewed summary.csv.
+
+    Returns the problems found before anything is written; an empty list
+    means it all went through. The ledger is the record, so if anything fails
+    before it is replaced, the files this commit wrote are removed again and
+    the folder is as it was. `summary` is the summary.csv shown in the
+    preview; the ledger check below is what keeps it correct.
+    """
+    config = inputs.config
+    ledger_path = base / "ledger.csv"
+    targets = {inv.number: base / "invoices" / f"{inv.month:%Y-%m}" / f"{inv.number}.pdf"
+               for inv in batch.invoices}
+
+    problems = []
+    for path in targets.values():
+        if path.exists():
+            # Numbers continue from the ledger, so a file here means an earlier
+            # commit stopped partway or the file was put there by hand.
+            problems.append(f"{path.relative_to(base)} — already exists, but ledger.csv has no "
+                            "record of it. If it was never sent, delete it and run again.")
+    current = ledger_path.read_bytes() if ledger_path.exists() else None
+    if current != inputs.ledger.raw:
+        problems.append("ledger.csv — changed while the drafts were open. Run again, so this "
+                        "run is checked against the new version.")
+    if problems:
+        return problems
+
+    # Re-render rather than move the drafts: a draft is a different document.
+    # Rendering everything first means a template problem stops the commit
+    # before a single file exists.
+    env = template_env(base)
+    pdfs = {inv.number: render_pdf(base, env, inv, config, draft=False)
+            for inv in batch.invoices}
+    new_ledger, rows = appended_ledger(inputs, batch)
+
+    written: list[Path] = []
+    made: list[Path] = []
+    staged_summary = None
+    try:
+        staged_summary = stage(base / "summary.csv", summary)
+        for inv in batch.invoices:
+            path = targets[inv.number]
+            for folder in (base / "invoices", path.parent):
+                if not folder.exists():
+                    folder.mkdir()
+                    made.append(folder)
+            with open(path, "xb") as f:
+                written.append(path)
+                f.write(pdfs[inv.number])
+        replace_atomically(ledger_path, new_ledger)
+    except BaseException:
+        for path in written:
+            path.unlink(missing_ok=True)
+        for folder in reversed(made):
+            folder.rmdir()
+        if staged_summary is not None:
+            staged_summary.unlink(missing_ok=True)
+        print("\nThe commit did not finish. The files it had written were removed and "
+              "ledger.csv is unchanged.", file=sys.stderr)
+        raise
+
+    print(f"\nCommitted {len(written)} invoice{'s' if len(written) != 1 else ''}:")
+    print("\n".join(f"  {path.relative_to(base)}" for path in written))
+    print(f"ledger.csv: {len(rows)} rows added.")
+
+    # The summary is already fully written beside its target, so all that is
+    # left is one rename. It is derived from the ledger, so even if that fails
+    # nothing is lost: the next commit rebuilds it.
+    try:
+        os.replace(staged_summary, base / "summary.csv")
+        print("summary.csv: replaced with the one in the preview.")
+    except OSError as exc:
+        staged_summary.unlink(missing_ok=True)
+        print(f"summary.csv could not be replaced ({exc}). The invoices and ledger.csv are "
+              "kept; summary.csv is rebuilt on the next commit.", file=sys.stderr)
+    return []
 
 
 NOTION_FILES = ("clients.txt", "rates.txt", "timesheet.txt")
@@ -1266,6 +1492,9 @@ def run(base: Path, today: date, ask=input, open_folder=open_in_finder) -> int:
         env = template_env(base)
         for inv in batch.invoices:
             write_pdf(base, env, inv, inputs.config, True, preview / f"{inv.number}.pdf")
+        # The summary.csv this commit would leave, so the totals get read too.
+        summary = summary_after(inputs, batch)
+        (preview / "summary.csv").write_bytes(summary)
         print("\n".join(preview_summary(inputs, batch, preview)))
         open_folder(preview)
 
@@ -1276,7 +1505,10 @@ def run(base: Path, today: date, ask=input, open_folder=open_in_finder) -> int:
         if answer.strip() != "commit":
             print("\nDiscarded. Nothing was written.")
             return EXIT_DISCARDED
-        commit(base, inputs, batch)
+        problems = commit(base, inputs, batch, summary)
+        if problems:
+            report_errors(problems)
+            return EXIT_REFUSED
         return EXIT_COMMITTED
     finally:
         shutil.rmtree(preview, ignore_errors=True)
