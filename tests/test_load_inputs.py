@@ -1,33 +1,10 @@
-import shutil
 from datetime import date
 from decimal import Decimal
 
 import pytest
 
-from make_invoices import COUNTRIES, load_inputs
-
-TODAY = date(2026, 12, 11)  # after the fixtures' last row, and the SEK as_at date
-
-
-@pytest.fixture
-def folder(tmp_path, fixtures_dir):
-    """A copy of the fixtures that a test can break, plus a loader for it."""
-    for f in fixtures_dir.iterdir():
-        shutil.copy(f, tmp_path / f.name)
-
-    class Folder:
-        path = tmp_path
-
-        def edit(self, name, old, new):
-            text = (tmp_path / name).read_text()
-            assert old in text, f"{old!r} not in {name}"
-            (tmp_path / name).write_text(text.replace(old, new))
-
-        def load(self):
-            errors = []
-            return load_inputs(tmp_path, TODAY, errors), errors
-
-    return Folder()
+from conftest import TODAY
+from make_invoices import COUNTRIES
 
 
 def only_error(folder):
@@ -256,8 +233,7 @@ CHARGE_ROW = ("charge,INV-0003,2026-08-31,Bluegum Theatre Company,,,,,,PO BT-000
 
 
 def test_ledger_rows_are_read(folder):
-    with open(folder.path / "ledger.csv", "a") as f:
-        f.write(WORK_ROW + "\n" + CHARGE_ROW + "\n")
+    folder.append("ledger.csv", WORK_ROW + "\n" + CHARGE_ROW + "\n")
     ledger = folder.load()[0].ledger
     assert ledger.work[0].date == date(2026, 8, 20) and ledger.work[0].hours == 2
     assert ledger.charges[0].amount_aud == Decimal("240.00")
@@ -276,6 +252,5 @@ def test_ledger_with_wrong_header(folder):
 
 
 def test_ledger_bad_row_names_its_line(folder):
-    with open(folder.path / "ledger.csv", "a") as f:
-        f.write(WORK_ROW.replace("2026-08-20", "20/08/2026") + "\n")
+    folder.append("ledger.csv", WORK_ROW.replace("2026-08-20", "20/08/2026") + "\n")
     assert only_error(folder).startswith("ledger.csv — line 2:")

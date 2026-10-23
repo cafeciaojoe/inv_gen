@@ -708,6 +708,138 @@ def load_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
     return Inputs(config, tuple(clients), rates, tuple(entries), ledger)
 
 
+# ---- Cross-file checks ------------------------------------------------------
+
+
+def _same_tag(tag: str) -> str:
+    return " ".join(tag.split()).casefold()
+
+
+def validate(inputs: Inputs, errors: list[str]) -> None:
+    """The checks that compare one file with another. Every failure is an error.
+
+    Settings that only matter for an invoice (rates, payment details, the
+    exchange rate) are checked for the clients being billed, so a client with
+    nothing in this timesheet can't stop the run.
+    """
+    config, ledger = inputs.config, inputs.ledger
+    owner = {p: c for c in inputs.clients for p in c.projects}
+
+    # Unknown project. A dropped row means undercharging, which nobody sees.
+    billed: list[tuple[Entry, Client]] = []
+    for e in inputs.entries:
+        client = owner.get(e.project)
+        if client is None:
+            errors.append(row_error(
+                "timesheet.txt", f'unknown Project value "{e.project}"', e.line,
+                ", ".join(sorted(owner)) + " (the Active Projects in clients.txt)",
+            ))
+        else:
+            billed.append((e, client))
+
+    # Work after the invoice date: usually a mistyped date, or an invoice_date
+    # override left in config.txt from last month.
+    source = " (set by invoice_date in config.txt)" if config.invoice_date_set else ""
+    for e in inputs.entries:
+        if e.date > config.invoice_date:
+            errors.append(row_error(
+                "timesheet.txt",
+                f"dated after the invoice date, {config.invoice_date.isoformat()}{source}",
+                e.line,
+            ))
+
+    # Duplicate lines. Pasting loses Notion's page IDs, so this compares content;
+    # two genuinely separate entries trip it only if their Task text is identical.
+    retell = "If these really are separate pieces of work, make their Task text differ in Notion."
+    already = {}
+    for w in ledger.work:
+        already.setdefault((w.date, w.project, w.hours, w.task), w.invoice_no)
+    batch: dict[tuple, list[Entry]] = {}
+    for e in inputs.entries:
+        key = (e.date, e.project, e.hours, e.task)
+        batch.setdefault(key, []).append(e)
+        if key in already:
+            errors.append(row_error(
+                "timesheet.txt", f"this line may already be billed, on {already[key]}",
+                e.line, None,
+            ) + f"\n  {retell}")
+    for same in batch.values():
+        if len(same) > 1:
+            errors.append(row_error(
+                "timesheet.txt", "the same line appears more than once",
+                "\n  ".join(e.line for e in same),
+            ) + f"\n  {retell}")
+
+    # Week tags. Every row with one tag becomes one week charge, so the tag has
+    # to belong to one client and one month, and must not have been billed.
+    weeks: dict[str, list[tuple[Entry, Client]]] = {}
+    for e, client in billed:
+        if e.billing == "week rate":
+            weeks.setdefault(e.tag, []).append((e, client))
+    billed_tags = {_same_tag(ch.description): ch.invoice_no
+                   for ch in ledger.charges if ch.unit == "week"}
+    spellings: dict[str, list[str]] = {}
+    for tag, rows in weeks.items():
+        lines = "\n  ".join(e.line for e, _ in rows)
+        if len({c.name for _, c in rows}) > 1:
+            errors.append(row_error(
+                "timesheet.txt", f'week rate tag "{tag}" is on projects of more than one client',
+                lines,
+            ))
+        if len({(e.date.year, e.date.month) for e, _ in rows}) > 1:
+            errors.append(row_error(
+                "timesheet.txt", f'week rate tag "{tag}" spans two months', lines,
+                "one month per tag, since invoices are cut by month. "
+                "Split it into two tags in Notion.",
+            ))
+        if _same_tag(tag) in billed_tags:
+            errors.append(row_error(
+                "timesheet.txt",
+                f'week rate tag "{tag}" was already billed, on {billed_tags[_same_tag(tag)]}',
+                lines, "a new tag for each booked week",
+            ))
+        spellings.setdefault(_same_tag(tag), []).append(tag)
+    for variants in spellings.values():
+        if len(variants) > 1:
+            # Two spellings would bill two weeks for what is surely one.
+            errors.append(
+                "timesheet.txt — week rate tags differ only in capitals or spacing: "
+                + ", ".join(f'"{v}"' for v in variants)
+                + "\n  Make every row of one booked week carry exactly the same tag."
+            )
+
+    # Per billed client: a rate for its tier, a way to pay, and today's rate.
+    clients = sorted({c.name: c for _, c in billed}.values(), key=lambda c: c.name)
+    for c in clients:
+        if c.tier not in inputs.rates.rates:
+            errors.append(f'rates.txt — no rates for tier "{c.tier}", used by {c.name}')
+    by_currency: dict[str, list[str]] = {}
+    for c in clients:
+        by_currency.setdefault(c.currency, []).append(c.name)
+    for currency, names in sorted(by_currency.items()):
+        who = ", ".join(names)
+        if currency not in config.payment:
+            errors.append(f"config.txt — no [payment.{currency}] block, so there is no way "
+                          f"to pay the invoice for {who}")
+        if currency != config.home_currency:
+            fx = config.fx[currency]
+            if fx.as_at != config.invoice_date:
+                errors.append(
+                    f"config.txt — as_at under [currency.{currency}] is {fx.as_at.isoformat()} "
+                    f"but the invoice date is {config.invoice_date.isoformat()}{source}. "
+                    f"Update rate and as_at to that day's rate (needed for {who})."
+                )
+
+
+def check_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
+    """Load everything, then compare the files with each other. None on any error."""
+    inputs = load_inputs(base, today, errors)
+    if inputs is None:
+        return None
+    validate(inputs, errors)
+    return None if errors else inputs
+
+
 NOTION_FILES = ("clients.txt", "rates.txt", "timesheet.txt")
 
 
@@ -725,11 +857,11 @@ def run(base: Path, today: date) -> int:
     and the real date.
     """
     errors: list[str] = []
-    inputs = load_inputs(base, today, errors)
+    inputs = check_inputs(base, today, errors)
     if inputs is None:
         report_errors(errors)
         return 1
-    print("make_invoices: inputs load cleanly; the rest is not built yet.")
+    print("make_invoices: inputs pass every check; the rest is not built yet.")
     return 1
 
 
