@@ -21,7 +21,10 @@ follows are in the design brief.
 import csv
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -1147,6 +1150,85 @@ def write_pdf(base: Path, env: jinja2.Environment, inv: Invoice, config: Config,
         f.write(pdf)
 
 
+# ---- Turnover and the preview summary ---------------------------------------
+
+
+def year_before(d: date) -> date:
+    try:
+        return d.replace(year=d.year - 1)
+    except ValueError:  # 29 February
+        return d.replace(year=d.year - 1, day=28)
+
+
+def rolling_turnover(ledger: Ledger, batch: Batch | None, end: date) -> Decimal:
+    """GST turnover for the 12 months ending `end`, in AUD, excluding GST.
+
+    Export sales count in full: GST-free is not the same as outside the
+    threshold. Summing amount_aud rather than amount keeps SEK invoices from
+    being added to AUD ones.
+    """
+    start = year_before(end)
+    charges = [c.amount_aud for c in ledger.charges if start < c.invoice_date <= end]
+    if batch is not None:
+        charges += [l.amount_aud for inv in batch.invoices if start < inv.date <= end
+                    for l in inv.lines]
+    return sum(charges, Decimal(0))
+
+
+def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
+    """What the run prints before asking for `commit`. Empty sections are left out."""
+    config = inputs.config
+    owner = {p: c for c in inputs.clients for p in c.projects}
+    note = " (set in config.txt)" if config.invoice_date_set else ""
+    out = [f"Invoice date  {long_date(config.invoice_date)}{note}", ""]
+
+    if batch.invoices:
+        width = max(len(i.client.name) for i in batch.invoices)
+        for inv in batch.invoices:
+            out.append(f"  {inv.number}  {inv.month:%b %Y}  {inv.client.name:<{width}}  "
+                       f"{inv.client.currency}  {inv.total:>12,.2f}")
+    else:
+        out.append("  No invoices: nothing in timesheet.txt charges anything this run.")
+
+    if batch.week_report:
+        out += ["", "Booked weeks", *batch.week_report]
+
+    # A forgotten fixed-price amount would never be billed and never complain,
+    # so every fixed-price row that charged nothing is shown here.
+    uncharged = sorted((e for e in inputs.entries
+                        if e.billing == "fixed price" and e.amount is None),
+                       key=lambda e: e.date)
+    if uncharged:
+        width = max(len(owner[e.project].name) for e in uncharged)
+        out += ["", "Fixed-price hours with no charge"]
+        out += [f"  {owner[e.project].name:<{width}}  {short_date(e.date):>6}  "
+                f"{fmt_hours(e.hours):>5}h  {e.task}" for e in uncharged]
+
+    turnover = rolling_turnover(inputs.ledger, batch, config.invoice_date)
+    threshold = config.turnover_threshold
+    out += ["", f"Turnover, last 12 months: A${turnover:,.2f} of A${threshold:,.0f}, "
+                "including this run"]
+    if not config.gst_registered:
+        if turnover >= threshold:
+            out.append("  ! Over the GST threshold. Registration is due within 21 days of "
+                       "crossing it, backdated to the day it was crossed.")
+        elif turnover >= threshold * config.turnover_warn_at:
+            out.append(f"  ! Past {config.turnover_warn_at:.0%} of the GST registration "
+                       "threshold.")
+
+    out += ["", f"Drafts are open in Finder: {preview}"]
+    return out
+
+
+def open_in_finder(path: Path) -> None:
+    subprocess.run(["open", str(path)], check=False)
+
+
+def commit(base: Path, inputs: Inputs, batch: Batch) -> None:
+    """Keep the run: final PDFs, ledger rows, summary.csv. Built in commit-outputs."""
+    print("Commit is not built yet. Nothing was written.")
+
+
 NOTION_FILES = ("clients.txt", "rates.txt", "timesheet.txt")
 
 
@@ -1156,29 +1238,56 @@ def report_errors(errors: list[str]) -> None:
     print("\n" + (FIX_IN_NOTION if pasted else "Nothing was written."), file=sys.stderr)
 
 
-def run(base: Path, today: date) -> int:
+EXIT_COMMITTED, EXIT_REFUSED, EXIT_DISCARDED = 0, 1, 2
+
+
+def run(base: Path, today: date, ask=input, open_folder=open_in_finder) -> int:
     """One full run against the invoicing folder at `base`. Returns the exit code.
 
-    `base` and `today` are parameters so tests can point a run at the fixtures
-    and pin the date; the command line always passes the script's own folder
-    and the real date.
+    Two gates: nothing is rendered until every check passes, and nothing is
+    kept until a person has read the drafts and typed `commit`. The drafts
+    live in a fresh temporary folder outside `base`, deleted whatever happens.
+
+    `today`, `ask` and `open_folder` are parameters so tests can pin the date,
+    answer the prompt and skip Finder; the command line passes the real ones.
     """
     errors: list[str] = []
     inputs = check_inputs(base, today, errors)
     if inputs is None:
         report_errors(errors)
-        return 1
+        return EXIT_REFUSED
     batch = compute(inputs)
-    for inv in batch.invoices:
-        print(f"{inv.number}  {inv.month:%b %Y}  {inv.client.name:<28} "
-              f"{inv.client.currency} {inv.total:>10,.2f}")
-    print("\n".join(batch.week_report))
-    print("make_invoices: charges computed; rendering is not built yet.")
-    return 1
+    if not batch.invoices and not batch.logged_only:
+        print("Nothing to do: timesheet.txt has no rows.")
+        return EXIT_COMMITTED
+
+    preview = Path(tempfile.mkdtemp(prefix="invoice-preview-"))
+    try:
+        env = template_env(base)
+        for inv in batch.invoices:
+            write_pdf(base, env, inv, inputs.config, True, preview / f"{inv.number}.pdf")
+        print("\n".join(preview_summary(inputs, batch, preview)))
+        open_folder(preview)
+
+        try:
+            answer = ask("\nType commit to keep them, anything else to discard: ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip() != "commit":
+            print("\nDiscarded. Nothing was written.")
+            return EXIT_DISCARDED
+        commit(base, inputs, batch)
+        return EXIT_COMMITTED
+    finally:
+        shutil.rmtree(preview, ignore_errors=True)
 
 
 def main() -> int:
-    return run(SCRIPT_DIR, date.today())
+    try:
+        return run(SCRIPT_DIR, date.today())
+    except KeyboardInterrupt:  # the preview folder is already gone by now
+        print("\nStopped.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
