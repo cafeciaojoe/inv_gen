@@ -63,7 +63,8 @@ the numbering carries on from them.
    that ran long or short, fixed-price hours that charged nothing (check no
    balance was forgotten), and your turnover against the GST threshold.
 5. **Type `commit`** to keep them, or anything else to throw them away. Closing the
-   window also throws them away. Either way, the draft folder is deleted.
+   window also throws them away. Either way, the draft folder is deleted. Then press
+   `r` to run again, or close the window.
 6. **Send the invoices** from `invoices/YYYY-MM/`.
 7. **Mark the rows as billed in Notion**, so they aren't pasted again next month.
    If they are, the script refuses them as duplicates anyway.
@@ -81,7 +82,8 @@ clients.txt — unknown Tier value "gold"
 Fix it in Notion and paste the table again. Nothing was written.
 ```
 
-Fix it in Notion, paste the table again, and double-click again. Don't edit the
+Fix it in Notion, paste the table again, and press `r` in the same window to run
+it again. Don't edit the
 pasted `.txt` files by hand: Notion is the source, and the next paste would undo
 the fix.
 

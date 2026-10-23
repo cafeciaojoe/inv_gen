@@ -8,9 +8,13 @@ open, without opening anything.
 """
 
 import os
+import pty
+import select
 import shutil
+import signal
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -104,3 +108,45 @@ def test_double_click_launcher(setup):
                             timeout=300)
     assert "Committed 7 invoices:" in result.stdout, result.stdout + result.stderr
     assert (setup.path / "invoices" / "2026-11" / "INV-0003.pdf").exists()
+
+
+@pytest.mark.skipif(shutil.which("uv") is None and not os.path.exists("/opt/homebrew/bin/uv"),
+                    reason="the launcher needs uv")
+# forkpty() warns when earlier tests have left WeasyPrint threads running. The
+# deadlock it warns about needs the child to run Python code; this child execs
+# the launcher straight away.
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+def test_launcher_runs_again_on_r(setup):
+    # A real terminal, so the launcher's one-key read works as it does in Terminal.
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir("/")
+        launcher = str(setup.path / "Make invoices.command")
+        os.execve(launcher, [launcher], setup.env())
+    seen = b""
+
+    def wait_for(text, times=1, timeout=180):
+        nonlocal seen
+        deadline = time.time() + timeout
+        while seen.count(text.encode()) < times:
+            assert time.time() < deadline, seen.decode(errors="replace")
+            if select.select([fd], [], [], 1)[0]:
+                seen += os.read(fd, 4096)
+
+    try:
+        wait_for("Type commit")
+        os.write(fd, b"no\n")
+        wait_for("Press r to run again, or close this window.")
+        os.write(fd, b"x")  # anything but r is ignored
+        time.sleep(1)
+        assert seen.count(b"Type commit") == 1
+        os.write(fd, b"r")
+        wait_for("Type commit", times=2)
+        os.write(fd, b"no\n")
+        wait_for("Discarded. Nothing was written.", times=2)
+        wait_for("Press r to run again", times=2)
+    finally:
+        os.kill(pid, signal.SIGHUP)  # what closing the window sends
+        os.waitpid(pid, 0)
+        os.close(fd)
+    assert not (setup.path / "invoices").exists()
