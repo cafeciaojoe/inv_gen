@@ -1,0 +1,185 @@
+/* Page setup. WeasyPrint honours @page; a browser preview ignores it, which is fine. */
+@page {
+  size: A4;
+  margin: 18mm 16mm 20mm 16mm;
+
+  @bottom-center {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 8pt;
+    color: #888;
+  }
+}
+
+:root {
+  --ink: #1a1a1a;
+  --muted: #6b6b6b;
+  --rule: #d8d8d8;
+  --rule-strong: #1a1a1a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 9.5pt;
+  line-height: 1.45;
+  color: var(--ink);
+  margin: 0;
+}
+
+h1 { font-size: 14pt; margin: 0 0 4mm 0; letter-spacing: 0.01em; }
+h2 { font-size: 17pt; margin: 0 0 4mm 0; font-weight: 600; text-align: right; }
+h3 {
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  margin: 0 0 2mm 0;
+  font-weight: 600;
+}
+
+p { margin: 0 0 2mm 0; }
+
+/* ---- Masthead ------------------------------------------------------- */
+
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12mm;
+  padding-bottom: 5mm;
+  border-bottom: 1.5pt solid var(--rule-strong);
+  margin-bottom: 7mm;
+}
+
+.masthead .from { max-width: 85mm; }
+.masthead .from p { color: var(--muted); font-size: 9pt; }
+.masthead .title { min-width: 62mm; }
+
+table.meta {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9pt;
+}
+table.meta th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--muted);
+  padding: 0.6mm 0;
+}
+table.meta td {
+  text-align: right;
+  padding: 0.6mm 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-to { margin-bottom: 7mm; }
+
+/* ---- Charges -------------------------------------------------------- */
+
+table.charges,
+table.work {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 7mm;
+}
+
+table.charges thead th,
+table.work thead th {
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 0.75pt solid var(--rule-strong);
+  padding: 0 0 1.5mm 0;
+}
+
+table.charges td,
+table.work td {
+  padding: 2mm 0;
+  border-bottom: 0.5pt solid var(--rule);
+  vertical-align: top;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-left: 6mm !important;
+}
+.desc { width: 100%; }
+.nowrap { white-space: nowrap; padding-right: 5mm !important; }
+
+table.charges tfoot th {
+  text-align: right;
+  font-weight: 400;
+  padding: 1.6mm 0;
+  color: var(--muted);
+}
+table.charges tfoot td {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding: 1.6mm 0;
+  border-bottom: none;
+}
+table.charges tfoot tr.total th,
+table.charges tfoot tr.total td {
+  font-size: 11.5pt;
+  font-weight: 600;
+  color: var(--ink);
+  border-top: 1pt solid var(--rule-strong);
+  padding-top: 2.5mm;
+}
+
+.note {
+  font-size: 8.5pt;
+  color: var(--muted);
+  margin: -4mm 0 7mm 0;
+}
+
+.pay { margin-bottom: 9mm; }
+.pay .due { margin-bottom: 2.5mm; }
+
+table.paydetails {
+  border-collapse: collapse;
+  margin-bottom: 2.5mm;
+}
+table.paydetails th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--muted);
+  padding: 0.7mm 8mm 0.7mm 0;
+  vertical-align: top;
+  white-space: nowrap;
+}
+table.paydetails td {
+  padding: 0.7mm 0;
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+.pay .paynote { font-size: 8.5pt; color: var(--muted); }
+
+/* ---- Work log ------------------------------------------------------- */
+
+/* Starts on its own page so the invoice itself is always page one. */
+.worklog { page-break-before: always; }
+.worklog table.work { font-size: 8.5pt; }
+.worklog tfoot th {
+  text-align: right;
+  padding: 2mm 0;
+  border-top: 0.75pt solid var(--rule-strong);
+}
+.worklog tfoot td {
+  text-align: right;
+  padding: 2mm 0;
+  font-weight: 600;
+  border-top: 0.75pt solid var(--rule-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keep table headers repeating across page breaks. */
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }

@@ -1,0 +1,6 @@
+| Client | Care of | Address | Email | Remarks/Reference | Tier | Currency | Active Projects |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Bluegum Theatre Company | Riley Example | 10 Example Road, Carlton VIC 3999, Australia | riley@bluegum.example | PO BT-0001 | base | AUD | Stage Lantern |
+| Tidewater Labs  | Jordan Example | Unit 2, 20 Sample Street, Brunswick VIC 3999, Australia  | jordan@tidewater.example |  | discounted | AUD | Wave Bench, Tide Clock  |
+| Northside Makers Trust | Casey Example | 30 Placeholder Lane, Coburg VIC 3999, Australia | casey@northside.example |  | subsidised | AUD | Tool Wall  |
+| Fjordlight AB | Kim Exempel | Exempelgatan 1, 111 11 Stockholm, Sweden | kim@fjordlight.example | PO FL-0001 | base | SEK | Aurora Lamp |

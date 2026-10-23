@@ -1,0 +1,19 @@
+# The design brief and working notes stay local.
+/resources/
+
+# Real invoicing data, if the script is ever run inside the repo. It holds bank
+# details and client finances. The tracked copies in tests/fixtures/ are fake.
+/config.txt
+/clients.txt
+/rates.txt
+/timesheet.txt
+/ledger.csv
+/summary.csv
+/invoices/
+
+# Local tooling
+.claude/settings.local.json
+.DS_Store
+__pycache__/
+.pytest_cache/
+.venv/

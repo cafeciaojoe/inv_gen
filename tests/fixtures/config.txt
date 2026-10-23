@@ -1,0 +1,90 @@
+# ============================================================
+#  TEST DATA. Every name, number and account in this file is
+#  invented. Account numbers are zeros and the BIC says TEST,
+#  so an invoice made from this file is obvious at a glance.
+# ============================================================
+#
+# Syntax is TOML. The extension is .txt so macOS opens it in TextEdit;
+# the script reads the contents, not the extension.
+
+[business]
+trading_name = "Example Design Studio"
+contact_name = "Alex Example"
+email = "alex@studio.example"
+phone = "+61 400 000 000"
+
+# Triple quotes let the address span several lines, printed as written.
+address = """
+1 Example Street
+Exampleton VIC 3999
+Australia"""
+
+
+[tax]
+# true ONLY once actually registered for GST.
+#   false -> no GST line, invoices headed "Invoice"
+#   true  -> GST line, invoices headed "Tax Invoice"
+# A document headed "tax invoice" while unregistered is a penalty offence.
+gst_registered = false
+abn = "00 000 000 000"
+
+# The GST rate is fixed at 10% in the script. The ledger stores the GST on
+# every line, so past invoices keep their own figures if the rate changes.
+
+# Registration is compulsory at this turnover over any rolling 12 months.
+# The run warns once turnover reaches turnover_warn_at of the threshold.
+turnover_threshold = 75000
+turnover_warn_at = 0.8
+
+
+[currency]
+home = "AUD"
+
+# The one source every foreign exchange rate is taken from. Stay with it: the
+# ATO wants rates taken consistently and a record of where they came from.
+# The name is written into every ledger row.
+source = "TEST DATA — not a real rate source"
+
+# rate is AUD per 1 SEK. as_at MUST equal the invoice date, or the run refuses.
+[currency.SEK]
+rate = 0.1450
+as_at = 2026-12-11
+
+
+[invoicing]
+# The invoice date is the day you run the script. To use a different date —
+# say the rate source published nothing today — uncomment this line.
+# Remove it again afterwards: a date left over from last month is refused,
+# because this month's work is dated after it.
+# invoice_date = 2026-11-30
+
+# Invoice numbers are prefix + zero-padded sequence, e.g. INV-0007.
+number_prefix = "INV-"
+number_padding = 4
+
+# Payment days. Applies to every client; there is no per-client override.
+payment_terms_days = 30
+
+
+# One block per currency received. The invoice shows the block matching the
+# client's Currency. A client whose currency has no block stops the run.
+
+[payment]
+note = "Please quote the invoice number as the payment reference."
+
+# Domestic AUD transfer.
+[payment.AUD]
+account_name = "Example Design Studio"
+bsb = "000-000"
+account_number = "00000000"
+
+# International transfer in Swedish kronor.
+[payment.SEK]
+account_name = "Example Design Studio"
+iban = "SE00 0000 0000 0000 0000 0000"
+swift_bic = "TESTSESSXXX"
+bank_name = "Example Bank AB"
+bank_address = """
+1 Example Square
+000 00 Exampleville
+Sweden"""

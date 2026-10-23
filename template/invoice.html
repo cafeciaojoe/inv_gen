@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ invoice.number }}</title>
+  <link rel="stylesheet" href="invoice.css">
+</head>
+<body>
+
+  {# Repeats on every page: position:fixed is per-page in WeasyPrint. #}
+  {% if draft %}<div class="watermark" aria-hidden="true">DRAFT</div>{% endif %}
+
+  <header class="masthead">
+    <div class="from">
+      <h1>{{ business.trading_name }}</h1>
+      <p class="address">{{ business.address | trim | replace("\n", "<br>") | safe }}</p>
+      <p>
+        {{ business.email }}{% if business.phone %}<br>{{ business.phone }}{% endif %}
+        {% if tax.gst_registered and tax.abn %}<br>ABN {{ tax.abn }}{% endif %}
+      </p>
+    </div>
+    <div class="title">
+      {# Heading: draft wins over everything. Otherwise registration status
+         decides, never hardcoded — "Tax Invoice" while unregistered is a
+         penalty offence. #}
+      <h2 {% if draft %}class="draft"{% endif %}>
+        {%- if draft %}Draft Invoice{% elif tax.gst_registered %}Tax Invoice{% else %}Invoice{% endif -%}
+      </h2>
+      {% if draft %}
+        <p class="draftnote">Preview only. Not a valid tax invoice and not issued.</p>
+      {% endif %}
+      <table class="meta">
+        <tr><th>Invoice</th><td>{{ invoice.number }}</td></tr>
+        <tr><th>Issued</th><td>{{ invoice.date }}</td></tr>
+        <tr><th>Due</th><td>{{ invoice.due_date }}</td></tr>
+        <tr><th>Period</th><td>{{ invoice.period }}</td></tr>
+      </table>
+    </div>
+  </header>
+
+  <section class="bill-to">
+    <h3>Bill to</h3>
+    <p>
+      <strong>{{ client.name }}</strong><br>
+      {% if client.care_of %}c/– {{ client.care_of }}<br>{% endif %}
+      {# Address is one cell, comma-separated, ending with the country.
+         The country is also what decides GST treatment. #}
+      {% for part in client.address.split(',') %}{{ part | trim }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+      {% if client.email %}<br>{{ client.email }}{% endif %}
+    </p>
+  </section>
+
+  {# Charge rows: the blocks the packing produced. This is what is billed. #}
+  <table class="charges">
+    <thead>
+      <tr>
+        <th class="desc">Description</th>
+        <th class="num">Qty</th>
+        <th class="num">Rate</th>
+        <th class="num">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for line in charges %}
+      <tr>
+        <td class="desc">{{ line.description }}</td>
+        <td class="num">{{ line.qty }}</td>
+        <td class="num">{{ line.rate | money }}</td>
+        <td class="num">{{ line.amount | money }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      {% if tax.gst_registered %}
+        <tr>
+          <th colspan="3">Subtotal</th>
+          <td class="num">{{ totals.subtotal | money }}</td>
+        </tr>
+        {% if client.gst_treatment == "export" %}
+          <tr class="gst">
+            <th colspan="3">GST (GST-free export)</th>
+            <td class="num">{{ 0 | money }}</td>
+          </tr>
+        {% else %}
+          <tr class="gst">
+            <th colspan="3">GST ({{ (tax.gst_rate * 100) | round | int }}%)</th>
+            <td class="num">{{ totals.gst | money }}</td>
+          </tr>
+        {% endif %}
+      {% endif %}
+      <tr class="total">
+        <th colspan="3">Total {{ client.currency }}</th>
+        <td class="num">{{ totals.total | money }}</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  {% if tax.gst_registered and client.gst_treatment == "export" %}
+    <p class="note">
+      This supply is GST-free as an export of services to a non-resident outside Australia.
+    </p>
+  {% endif %}
+
+  {# `pay` is the [payment.<CURRENCY>] block the script selected for this client. #}
+  <section class="pay">
+    <h3>How to pay</h3>
+    <p class="due">Due {{ invoice.due_date }} ({{ terms_days }} days) in {{ client.currency }}.</p>
+    <table class="paydetails">
+      {% if pay.account_name %}
+        <tr><th>Account name</th><td>{{ pay.account_name }}</td></tr>
+      {% endif %}
+      {% if pay.bsb %}
+        <tr><th>BSB</th><td>{{ pay.bsb }}</td></tr>
+        <tr><th>Account number</th><td>{{ pay.account_number }}</td></tr>
+      {% endif %}
+      {% if pay.iban %}
+        <tr><th>IBAN</th><td>{{ pay.iban }}</td></tr>
+        <tr><th>SWIFT / BIC</th><td>{{ pay.swift_bic }}</td></tr>
+      {% endif %}
+      {% if pay.bank_name %}
+        <tr>
+          <th>Bank</th>
+          <td>
+            {{ pay.bank_name }}
+            {% if pay.bank_address %}<br>{{ pay.bank_address | trim | replace("\n", "<br>") | safe }}{% endif %}
+          </td>
+        </tr>
+      {% endif %}
+    </table>
+    <p class="paynote">{{ payment.note }}</p>
+  </section>
+
+  {# Work rows: the audit trail. No amounts — the charges table above carries those.
+     The script excludes fixed-price rows from `work`: a fixed price buys a
+     deliverable, not time, so its hours are internal and never printed here.
+     If `work` is empty the whole section is dropped. #}
+  {% if work %}
+  <section class="worklog">
+    <h3>Work completed</h3>
+    <table class="work">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Project</th>
+          <th class="desc">Task</th>
+          <th class="num">Hours</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in work %}
+        <tr>
+          <td class="nowrap">{{ row.date }}</td>
+          <td>{{ row.project }}</td>
+          <td class="desc">{{ row.task }}</td>
+          <td class="num">{{ row.hours }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th colspan="3">Total hours</th>
+          <td class="num">{{ totals.hours }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </section>
+  {% endif %}
+
+</body>
+</html>
