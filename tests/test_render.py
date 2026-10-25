@@ -71,6 +71,7 @@ def test_registered_export_is_gst_free(folder, render):
 def test_bill_to_and_reference(render):
     html = render("INV-0004")
     assert "Exempelgatan 1<br>111 11 Stockholm<br>Sweden" in html
+    assert "c/o Kim Exempel<br>" in html
     assert "<th>Your reference</th><td>PO FL-0001</td>" in html
     assert "Your reference" not in render("INV-0005")  # Northside has none
 

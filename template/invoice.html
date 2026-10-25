@@ -43,7 +43,7 @@
     <h3>Bill to</h3>
     <p>
       <strong>{{ client.name }}</strong><br>
-      {% if client.care_of %}c/– {{ client.care_of }}<br>{% endif %}
+      {% if client.care_of %}c/o {{ client.care_of }}<br>{% endif %}
       {# Address is one cell, comma-separated, ending with the country.
          The country is also what decides GST treatment. #}
       {% for part in client.address.split(',') %}{{ part | trim }}{% if not loop.last %}<br>{% endif %}{% endfor %}

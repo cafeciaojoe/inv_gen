@@ -68,21 +68,27 @@ p { margin: 0 0 2mm 0; }
 
 .masthead .from { max-width: 85mm; }
 .masthead .from p { font-size: 9pt; }
-.masthead .title { min-width: 62mm; }
+/* Capped, so a long reference wraps sooner rather than squeezing the business name. */
+.masthead .title { min-width: 62mm; max-width: 88mm; }
 
 table.meta {
   width: 100%;
   border-collapse: collapse;
   font-size: 9pt;
 }
+/* Labels stay on one line with a gap after them; a long value (a client's
+   reference, say) wraps instead of running into its label. */
 table.meta th {
   text-align: left;
   font-weight: 400;
-  padding: 0.6mm 0;
+  padding: 0.6mm 5mm 0.6mm 0;
+  white-space: nowrap;
+  vertical-align: top;
 }
 table.meta td {
   text-align: right;
   padding: 0.6mm 0;
+  vertical-align: top;
 }
 
 .bill-to { margin-bottom: 7mm; }
