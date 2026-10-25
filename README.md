@@ -91,6 +91,7 @@ The usual ones:
 
 | Message | What to do |
 | --- | --- |
+| Hours "-" is not a number | Hours must be a number. For a fixed-price payment with no hours, put `0`. |
 | unknown Project value | The project isn't in Active Projects in your Clients table. Add it, or fix the spelling. |
 | this line may already be billed | You pasted a row that's already in the ledger. Leave it out. If it really is new work, make its Task text different. |
 | week rate tag … spans two months | Split the booked week into two tags, one per month. |

@@ -141,18 +141,34 @@ def split_row(line: str) -> list[str] | None:
 
 
 def parse_table(file: str, text: str, errors: list[str]) -> Table | None:
-    """Parse one pasted table. Bad rows become errors and are left out."""
+    """Parse one pasted table. Bad rows become errors and are left out.
+
+    A line break typed inside a Notion cell (Shift-Return in an address, say)
+    pastes as a real line break, splitting the row across lines. A row that
+    starts with | but doesn't end with one is still open, so the lines after
+    it are joined on, each break becoming a space, until it closes. A stray
+    line after a row that did close is still refused.
+    """
     parsed = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
+    open_row = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue  # between rows, or a blank line inside an open cell
+        if open_row:
+            line, open_row = f"{open_row} {line}", ""
         cells = split_row(line)
         if cells is None:
-            errors.append(row_error(file, "this line is not a table row", line.strip()))
+            if line.startswith("|"):
+                open_row = line
+            else:
+                errors.append(row_error(file, "this line is not a table row", line))
             continue
         if all(_SEPARATOR_CELL.fullmatch(cell) for cell in cells):
             continue  # the | --- | row under the header
-        parsed.append((tuple(cells), line.strip()))
+        parsed.append((tuple(cells), line))
+    if open_row:
+        errors.append(row_error(file, "this row never closes with a |", open_row))
 
     if not parsed:
         errors.append(f"{file} — no table found. Paste the table from Notion.")

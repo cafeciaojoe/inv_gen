@@ -149,6 +149,16 @@ def test_address_must_end_with_a_known_country(folder, address, typed):
     )
 
 
+def test_address_typed_over_several_lines_in_notion(folder):
+    folder.edit("clients.txt", "Exempelgatan 1, 111 11 Stockholm, Sweden",
+                "Exempelgatan 1,\n111 11 Stockholm,\nSweden")
+    inputs, errors = folder.load()
+    assert errors == []
+    fjord = next(c for c in inputs.clients if c.name == "Fjordlight AB")
+    assert fjord.address == "Exempelgatan 1, 111 11 Stockholm, Sweden"
+    assert fjord.country == "Sweden" and fjord.gst_treatment == "export"
+
+
 def test_duplicate_client(folder):
     folder.edit("clients.txt", "| Fjordlight AB |", "| Bluegum Theatre Company |")
     error = only_error(folder)

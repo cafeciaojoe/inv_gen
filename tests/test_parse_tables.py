@@ -81,6 +81,35 @@ def test_stray_text_is_an_error():
     assert errors == ["timesheet.txt — this line is not a table row\n  some note"]
 
 
+def test_line_breaks_inside_a_cell_are_joined():
+    table, errors = parse(
+        "| Client | Address | Tier |\n| --- | --- | --- |\n"
+        "| Example Co | 16 Example Street, Town,\n"
+        "VIC 3999,\n"
+        "\n"
+        "Australia | base |\n"
+        "| Other Co | 1 Road, Australia | base |\n"
+    )
+    assert errors == []
+    assert [r.cells for r in table.rows] == [
+        ("Example Co", "16 Example Street, Town, VIC 3999, Australia", "base"),
+        ("Other Co", "1 Road, Australia", "base"),
+    ]
+    assert table.rows[0].line == ("| Example Co | 16 Example Street, Town, VIC 3999, "
+                                  "Australia | base |")
+
+
+def test_row_that_never_closes_is_an_error():
+    _, errors = parse("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4\n")
+    assert errors == ["timesheet.txt — this row never closes with a |\n  | 3 | 4"]
+
+
+def test_stray_text_after_a_closed_row_is_still_refused():
+    table, errors = parse("| A |\n| --- |\n| 1 |\nsome note\n")
+    assert len(table.rows) == 1
+    assert errors == ["timesheet.txt — this line is not a table row\n  some note"]
+
+
 def test_empty_file_is_an_error():
     table, errors = parse("\n  \n")
     assert table is None
