@@ -111,20 +111,30 @@ def test_gst_columns_once_registered(folder):
 def test_summary_csv(folder):
     commit_run(folder)
     assert (folder.path / "summary.csv").read_text() == (
-        "work_month,client,invoice,invoiced,hours,amount_aud\n"
-        "2026-09,Bluegum Theatre Company,INV-0001,2026-12,3.25,390.00\n"
-        "2026-09,Tidewater Labs,INV-0002,2026-12,9.25,712.50\n"
-        "2026-09,Total,,,12.5,1102.50\n"
-        "2026-11,Bluegum Theatre Company,INV-0003,2026-12,94.75,7850.00\n"
-        "2026-11,Fjordlight AB,INV-0004,2026-12,12.75,1370.00\n"
-        "2026-11,Northside Makers Trust,INV-0005,2026-12,14.5,1800.00\n"
-        "2026-11,Tidewater Labs,INV-0006,2026-12,2,180.00\n"
-        "2026-11,Total,,,124,11200.00\n"
-        "2026-12,Northside Makers Trust,INV-0007,2026-12,11.25,2000.00\n"
-        "2026-12,Total,,,11.25,2000.00\n"
+        "work_month,client,invoice,invoiced,hours,AUD,SEK,total_aud\n"
+        "2026-09,Bluegum Theatre Company,INV-0001,2026-12,3.25,390.00,,390.00\n"
+        "2026-09,Tidewater Labs,INV-0002,2026-12,9.25,712.50,,712.50\n"
+        "2026-09,Total,,,12.5,1102.50,,1102.50\n"
+        "2026-11,Bluegum Theatre Company,INV-0003,2026-12,94.75,7850.00,,7850.00\n"
+        "2026-11,Fjordlight AB,INV-0004,2026-12,12.75,,9448.30,1370.00\n"
+        "2026-11,Northside Makers Trust,INV-0005,2026-12,14.5,1800.00,,1800.00\n"
+        "2026-11,Tidewater Labs,INV-0006,2026-12,2,180.00,,180.00\n"
+        "2026-11,Total,,,124,9830.00,9448.30,11200.00\n"
+        "2026-12,Northside Makers Trust,INV-0007,2026-12,11.25,2000.00,,2000.00\n"
+        "2026-12,Total,,,11.25,2000.00,,2000.00\n"
         "\n"
-        ',"Turnover, 12 months to 2026-12-11",,,,14302.50\n'
+        ',"Turnover, 12 months to 2026-12-11",,,,,,14302.50\n'
     )
+
+
+def test_summary_has_a_column_only_for_currencies_invoiced(folder):
+    text = (folder.path / "timesheet.txt").read_text()
+    kept = [line for line in text.splitlines() if "Aurora Lamp" not in line]
+    (folder.path / "timesheet.txt").write_text("\n".join(kept) + "\n")
+    commit_run(folder)
+    summary = (folder.path / "summary.csv").read_text().splitlines()
+    assert summary[0] == "work_month,client,invoice,invoiced,hours,AUD,total_aud"
+    assert summary[-1] == ',"Turnover, 12 months to 2026-12-11",,,,,12932.50'
 
 
 def test_commit_prints_what_it_kept(folder, capsys):
@@ -193,7 +203,7 @@ def test_next_month_continues_the_numbering(folder):
     assert commit_run(folder) == EXIT_COMMITTED
     assert pdfs_on_disk(folder)["invoices/2026-12"] == ["INV-0007.pdf", "INV-0008.pdf"]
     summary = (folder.path / "summary.csv").read_text()
-    assert "2026-12,Tidewater Labs,INV-0008,2026-12,2,180.00\n" in summary
+    assert "2026-12,Tidewater Labs,INV-0008,2026-12,2,180.00,,180.00\n" in summary
 
 
 def test_month_with_nothing_charged_is_logged_without_an_invoice(folder):
@@ -203,7 +213,7 @@ def test_month_with_nothing_charged_is_logged_without_an_invoice(folder):
     assert [(r["date"], r["hours"], r["invoice_date"]) for r in logged] == [
         ("2026-12-02", "7", "2026-12-11"), ("2026-12-09", "4.25", "2026-12-11")]
     summary = (folder.path / "summary.csv").read_text()
-    assert "2026-12,Northside Makers Trust,,,11.25,0.00\n" in summary
+    assert "2026-12,Northside Makers Trust,,,11.25,,,0.00\n" in summary
 
 
 # ---- Refused before anything is written -------------------------------------

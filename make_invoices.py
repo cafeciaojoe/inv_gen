@@ -650,6 +650,8 @@ class LedgerCharge:
     unit: str
     description: str
     amount_aud: Decimal
+    currency: str
+    amount: Decimal  # in `currency`, as invoiced
 
 
 @dataclass(frozen=True)
@@ -690,7 +692,8 @@ def parse_ledger(raw: bytes, errors: list[str]) -> Ledger:
                 charges.append(LedgerCharge(row["invoice_no"],
                                             date.fromisoformat(row["invoice_date"]),
                                             row["client"], row["unit"], row["description"],
-                                            Decimal(row["amount_aud"])))
+                                            Decimal(row["amount_aud"]),
+                                            row["currency"].upper(), Decimal(row["amount"])))
             else:
                 errors.append(f'ledger.csv — line {line}: row_type "{row["row_type"]}" '
                               f"is not work or charge")
@@ -1259,9 +1262,6 @@ def open_in_finder(path: Path) -> None:
 
 # ---- Commit -----------------------------------------------------------------
 
-SUMMARY_COLUMNS = ["work_month", "client", "invoice", "invoiced", "hours", "amount_aud"]
-
-
 def csv_text(rows: list[list[str]]) -> str:
     buffer = io.StringIO()
     csv.writer(buffer, lineterminator="\n").writerows(rows)
@@ -1328,12 +1328,13 @@ def ledger_rows(batch: Batch, config: Config) -> list[list[str]]:
     return rows
 
 
-def summary_rows(ledger: Ledger, end: date) -> list[list[str]]:
+def summary_rows(ledger: Ledger, end: date, home: str) -> list[list[str]]:
     """summary.csv: one row per invoice, by the month the work was done.
 
-    Each invoice covers one month of work, so its work rows give the month.
-    An opening row entered by hand without work rows goes under the month it
-    was invoiced.
+    Each currency invoiced in gets a column of the amounts as invoiced, home
+    currency first, and total_aud adds everything up in AUD. Each invoice
+    covers one month of work, so its work rows give the month. An opening row
+    entered by hand without work rows goes under the month it was invoiced.
     """
     work: dict[str, list[LedgerWork]] = {}
     for w in ledger.work:
@@ -1341,33 +1342,47 @@ def summary_rows(ledger: Ledger, end: date) -> list[list[str]]:
     charges: dict[str, list[LedgerCharge]] = {}
     for c in ledger.charges:
         charges.setdefault(c.invoice_no, []).append(c)
+    currencies = sorted({c.currency for c in ledger.charges}, key=lambda cur: (cur != home, cur))
 
-    rows = []  # work month, client, invoice, invoiced, hours, amount
+    rows = []  # work month, client, invoice, invoiced, hours, {currency: amount}, total_aud
     for number in sorted((set(work) | set(charges)) - {""}):
         ws, cs = work.get(number, []), charges.get(number, [])
         month = min(w.date for w in ws) if ws else cs[0].invoice_date
+        invoiced: dict[str, Decimal] = {}
+        for c in cs:
+            invoiced[c.currency] = invoiced.get(c.currency, Decimal(0)) + c.amount
         rows.append((f"{month:%Y-%m}", (cs or ws)[0].client, number,
                      f"{cs[0].invoice_date:%Y-%m}" if cs else "",
-                     sum((w.hours for w in ws), Decimal(0)),
+                     sum((w.hours for w in ws), Decimal(0)), invoiced,
                      sum((c.amount_aud for c in cs), Decimal(0))))
     logged: dict[tuple[str, str], Decimal] = {}
     for w in work.get("", []):
         key = (f"{w.date:%Y-%m}", w.client)
         logged[key] = logged.get(key, Decimal(0)) + w.hours
-    rows += [(month, client, "", "", hours, Decimal(0)) for (month, client), hours in logged.items()]
+    rows += [(month, client, "", "", hours, {}, Decimal(0))
+             for (month, client), hours in logged.items()]
     rows.sort(key=lambda r: (r[0], r[2] or "~", r[1]))  # no-invoice rows last in a month
 
-    out = [SUMMARY_COLUMNS]
+    def amounts(invoiced: dict[str, Decimal]) -> list[str]:
+        # Blank, not 0.00, where nothing was invoiced in that currency.
+        return [f"{invoiced[cur]:.2f}" if cur in invoiced else "" for cur in currencies]
+
+    out = [["work_month", "client", "invoice", "invoiced", "hours", *currencies, "total_aud"]]
     for month in sorted({r[0] for r in rows}):
         group = [r for r in rows if r[0] == month]
-        out += [[m, client, number, invoiced, fmt_hours(hours), f"{amount:.2f}"]
-                for m, client, number, invoiced, hours, amount in group]
+        out += [[m, client, number, when, fmt_hours(hours), *amounts(invoiced), f"{aud:.2f}"]
+                for m, client, number, when, hours, invoiced, aud in group]
+        month_invoiced: dict[str, Decimal] = {}
+        for r in group:
+            for cur, amount in r[5].items():
+                month_invoiced[cur] = month_invoiced.get(cur, Decimal(0)) + amount
         out.append([month, "Total", "", "",
                     fmt_hours(sum((r[4] for r in group), Decimal(0))),
-                    f"{sum((r[5] for r in group), Decimal(0)):.2f}"])
+                    *amounts(month_invoiced),
+                    f"{sum((r[6] for r in group), Decimal(0)):.2f}"])
     out.append([])
     out.append(["", f"Turnover, 12 months to {end.isoformat()}", "", "", "",
-                f"{rolling_turnover(ledger, None, end):.2f}"])
+                *[""] * len(currencies), f"{rolling_turnover(ledger, None, end):.2f}"])
     return out
 
 
@@ -1388,7 +1403,8 @@ def appended_ledger(inputs: Inputs, batch: Batch) -> tuple[bytes, list[list[str]
 def summary_after(inputs: Inputs, batch: Batch) -> bytes:
     """summary.csv as it will be after this commit, built for the preview."""
     new_ledger, _ = appended_ledger(inputs, batch)
-    rows = summary_rows(parse_ledger(new_ledger, []), inputs.config.invoice_date)
+    rows = summary_rows(parse_ledger(new_ledger, []), inputs.config.invoice_date,
+                        inputs.config.home_currency)
     return csv_text(rows).encode("utf-8")
 
 

@@ -127,8 +127,9 @@ its work is dated after that date.
 be rebuilt from it. Keep it backed up. The ATO wants five years.
 
 `summary.csv` is your monthly view: one row per invoice, sorted by the month the
-work was done, with the month it was invoiced, hours, the amount in AUD, a total
-per month, and your rolling 12-month turnover. It opens in Numbers.
+work was done, with the month it was invoiced, hours, the amount in each currency
+you invoiced in (AUD, SEK), everything added up in AUD, a total per month, and your
+rolling 12-month turnover. It opens in Numbers.
 
 ## Turning on GST
 
