@@ -117,7 +117,9 @@ def test_summary_for_the_fixtures(folder, capsys):
     out = capsys.readouterr().out
     assert out.startswith("Invoice date  11 December 2026\n\n")
     assert "  INV-0003  Nov 2026  Bluegum Theatre Company  AUD      7,850.00\n" in out
-    assert "  INV-0004  Nov 2026  Fjordlight AB            SEK      9,448.30\n" in out
+    assert "  INV-0004  Nov 2026  Fjordlight AB            SEK      9,448.29\n" in out
+    assert ("\n\nHours on the invoices: fixed price hidden, week rate shown "
+            "(set in config.txt)\n") in out
     assert "\nBooked weeks\n  ! Lantern build week" in out
     assert ("\nFixed-price hours with no charge\n"
             "  Northside Makers Trust  23 Nov      6h  Tool wall layout and CAD\n"
@@ -130,8 +132,8 @@ def test_summary_for_the_fixtures(folder, capsys):
 
 def test_finder_line_matches_what_is_in_the_folder(folder, capsys):
     header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
-    one = "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |"
-    none = "| December 10, 2026 | 2 | Tool wall touch-up | Tool Wall | fixed price |  |"
+    one = "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |  |"
+    none = "| December 10, 2026 | 2 | Tool wall touch-up | Tool Wall | fixed price | Tool wall build |  |"
     for row, expected in [(one, "The draft invoice and summary.csv are"),
                           (none, "summary.csv is")]:
         (folder.path / "timesheet.txt").write_text("\n".join(header + [row]) + "\n")

@@ -296,6 +296,8 @@ class Config:
     terms_days: int
     payment: dict[str, dict]  # currency -> its [payment.<CURRENCY>] block
     payment_note: str
+    # Which rows' hours the invoice's work log shows; hourly rows always do.
+    show_hours: dict[str, bool]  # billing type -> shown
 
 
 _KINDS = {
@@ -306,6 +308,59 @@ _KINDS = {
     "a date like 2026-11-30, without quotes":
         lambda v: isinstance(v, date) and not isinstance(v, datetime),
 }
+
+
+# Every setting config.txt can hold, by section. In TOML a setting belongs to
+# the [section] above it, so a line added at the bottom of the file lands in
+# the last block. Unknown or misplaced settings are refused rather than
+# ignored, because ignoring one silently falls back to a default.
+SETTINGS = {
+    "business": {"trading_name", "contact_name", "email", "phone", "address"},
+    "tax": {"gst_registered", "abn", "turnover_threshold", "turnover_warn_at"},
+    "currency": {"home", "source"},
+    "invoicing": {"invoice_date", "number_prefix", "number_padding", "payment_terms_days",
+                  "show_fixed_price_hours", "show_week_rate_hours"},
+    "payment": {"note"},
+}
+CURRENCY_SETTINGS = {"rate", "as_at"}  # in each [currency.<CODE>]
+PAYMENT_SETTINGS = {"account_name", "bsb", "account_number", "iban", "swift_bic",
+                    "bank_name", "bank_address"}  # in each [payment.<CODE>]
+
+
+def check_settings(raw: dict, errors: list[str]) -> None:
+    belongs = {key: f"[{section}]" for section, keys in SETTINGS.items() for key in keys}
+    belongs.update({key: "[currency.<CODE>]" for key in CURRENCY_SETTINGS})
+    belongs.update({key: "[payment.<CODE>]" for key in PAYMENT_SETTINGS})
+
+    def refuse(key: str, where: str) -> None:
+        if key in belongs:
+            errors.append(f"config.txt — {key} is {where}, but it belongs under {belongs[key]}. "
+                          "A setting belongs to the [section] above it, so one added at the "
+                          "end of the file lands in the last section.")
+        else:
+            errors.append(f"config.txt — {key} {where} is not a setting the script knows")
+
+    for name, value in raw.items():
+        if name == "paths":
+            errors.append("config.txt — [paths] is no longer used: drafts go to a fresh "
+                          "temporary folder. Delete the [paths] section.")
+        elif name not in SETTINGS:
+            if isinstance(value, dict):
+                errors.append(f"config.txt — [{name}] is not a section the script knows")
+            else:
+                refuse(name, "above the first [section]")
+    for section, keys in SETTINGS.items():
+        block = raw.get(section)
+        if not isinstance(block, dict):
+            continue
+        for key, value in block.items():
+            if section in ("currency", "payment") and isinstance(value, dict):
+                allowed = CURRENCY_SETTINGS if section == "currency" else PAYMENT_SETTINGS
+                for inner in value:
+                    if inner not in allowed:
+                        refuse(inner, f"under [{section}.{key}]")
+            elif key not in keys:
+                refuse(key, f"under [{section}]")
 
 
 def load_config(base: Path, today: date, errors: list[str]) -> Config | None:
@@ -322,6 +377,7 @@ def load_config(base: Path, today: date, errors: list[str]) -> Config | None:
         return None
 
     count_before = len(errors)
+    check_settings(raw, errors)
 
     def setting(section: str, key: str, kind: str, required: bool = True):
         block = raw.get(section, {})
@@ -370,6 +426,11 @@ def load_config(base: Path, today: date, errors: list[str]) -> Config | None:
     override = setting(
         "invoicing", "invoice_date", "a date like 2026-11-30, without quotes", required=False
     )
+    # Optional, so a config.txt from before these settings keeps working.
+    # Defaults: a fixed price buys a deliverable, so its hours stay internal;
+    # a booked week is time, so its hours show.
+    show_fixed = setting("invoicing", "show_fixed_price_hours", "true or false", required=False)
+    show_week = setting("invoicing", "show_week_rate_hours", "true or false", required=False)
 
     payment = raw.get("payment", {})
     if not isinstance(payment, dict):
@@ -394,6 +455,9 @@ def load_config(base: Path, today: date, errors: list[str]) -> Config | None:
         terms_days=terms,
         payment=blocks,
         payment_note=note,
+        show_hours={"": True,
+                    "week rate": True if show_week is None else show_week,
+                    "fixed price": False if show_fixed is None else show_fixed},
     )
 
 
@@ -554,8 +618,8 @@ class Entry:
     task: str
     project: str
     billing: str  # one of BILLING_TYPES
-    tag: str  # week rate rows only
-    amount: Decimal | None  # fixed price rows that carry an amount
+    tag: str  # names the booked week or the fixed-price agreement; empty when hourly
+    amount: Decimal | None  # a fixed-price charge, or a week's custom price
     line: str
 
 
@@ -563,8 +627,8 @@ def load_timesheet(base: Path, errors: list[str]) -> list[Entry]:
     table = read_table(base, "timesheet.txt", errors)
     if table is None:
         return []
-    col = columns(table, ["Date", "Hours", "Task", "Project", "Billing type", "Week rate tag"],
-                  errors)
+    col = columns(table, ["Date", "Hours", "Task", "Project", "Billing type", "Week rate tag",
+                          "Amount"], errors)
     if col is None:
         return []
 
@@ -597,29 +661,35 @@ def load_timesheet(base: Path, errors: list[str]) -> list[Entry]:
             bad("empty Project", row)
 
         billing = cell("Billing type").casefold()
-        last = cell("Week rate tag")
-        tag, amount = "", None
+        tag, typed_amount = cell("Week rate tag"), cell("Amount")
+        amount = None
         if billing not in BILLING_TYPES:
             bad(f'unknown Billing type value "{cell("Billing type")}"', row,
                 "empty, week rate, fixed price")
-        elif billing == "week rate":
+        elif not billing:
+            if tag:
+                bad(f'tag "{tag}" is filled in but Billing type is empty', row,
+                    "no tag on an hourly row")
+            if typed_amount:
+                bad(f'Amount "{typed_amount}" is filled in but Billing type is empty', row,
+                    "no amount on an hourly row")
+        else:
+            # The tag prints on the invoice, so every week and fixed-price row has one.
             # A number where a tag belongs is refused, not reinterpreted.
-            if not last:
-                bad("week rate row has no tag", row, "a tag naming the booked week")
-            elif parse_money(last) is not None:
-                bad(f'week rate tag "{last}" is a number', row,
-                    "a tag naming the booked week, e.g. Lantern build week — agreed 14 Oct")
-            else:
-                tag = last
-        elif billing == "fixed price":
-            if last:
-                amount = parse_money(last)
+            if not tag:
+                bad(f"{billing} row has no tag", row,
+                    "a tag naming the booked week or the agreement")
+            elif parse_money(tag) is not None:
+                bad(f'tag "{tag}" is a number', row,
+                    "a tag naming the booked week or the agreement, e.g. Lantern build "
+                    "week — agreed 14 Oct. Amounts go in the Amount column.")
+            # On a fixed-price row an amount is a charge. On a week rate row it is
+            # that week's custom price, used instead of the rate card's.
+            if typed_amount:
+                amount = parse_money(typed_amount)
                 if amount is None or amount <= 0:
-                    bad(f'fixed price amount "{last}" is not an amount', row,
+                    bad(f'Amount "{typed_amount}" is not an amount', row,
                         "empty, or an amount like 1500 or 1,500.00")
-        elif last:
-            bad(f'"{last}" is filled in but Billing type is empty', row,
-                "empty, unless Billing type is week rate or fixed price")
 
         if len(errors) == problems_before:
             entries.append(Entry(day, hours, cell("Task"), cell("Project"), billing, tag,
@@ -640,6 +710,8 @@ class LedgerWork:
     hours: Decimal
     task: str
     project: str
+    billing_type: str
+    tag: str  # the row's week or fixed-price tag, kept in the description column
 
 
 @dataclass(frozen=True)
@@ -687,7 +759,8 @@ def parse_ledger(raw: bytes, errors: list[str]) -> Ledger:
             if row["row_type"] == "work":
                 work.append(LedgerWork(row["invoice_no"], row["client"],
                                        date.fromisoformat(row["date"]),
-                                       Decimal(row["hours"]), row["task"], row["project"]))
+                                       Decimal(row["hours"]), row["task"], row["project"],
+                                       row["billing_type"].casefold(), row["description"]))
             elif row["row_type"] == "charge":
                 charges.append(LedgerCharge(row["invoice_no"],
                                             date.fromisoformat(row["invoice_date"]),
@@ -810,8 +883,12 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
     for e, client in billed:
         if e.billing == "week rate":
             weeks.setdefault(e.tag, []).append((e, client))
+    # Week tags are kept on work rows. Ledgers written before that kept the tag
+    # as the week charge's description, so those are read too.
     billed_tags = {_same_tag(ch.description): ch.invoice_no
                    for ch in ledger.charges if ch.unit == "week"}
+    billed_tags.update({_same_tag(w.tag): w.invoice_no for w in ledger.work
+                        if w.billing_type == "week rate" and w.tag})
     spellings: dict[str, list[str]] = {}
     for tag, rows in weeks.items():
         lines = "\n  ".join(e.line for e, _ in rows)
@@ -819,6 +896,11 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
             errors.append(row_error(
                 "timesheet.txt", f'week rate tag "{tag}" is on projects of more than one client',
                 lines,
+            ))
+        if len({e.amount for e, _ in rows if e.amount is not None}) > 1:
+            errors.append(row_error(
+                "timesheet.txt", f'week rate tag "{tag}" has different Amounts on its rows',
+                lines, "one custom price for the week, on one row or the same on every row",
             ))
         if len({(e.date.year, e.date.month) for e, _ in rows}) > 1:
             errors.append(row_error(
@@ -914,14 +996,21 @@ def short_date(d: date) -> str:
 
 @dataclass(frozen=True)
 class Line:
-    date: date  # for ordering; a week's first day
+    date: date  # for ordering: the first day the line covers
     unit: str  # week, day, hour or fixed
-    description: str
+    project: str  # more than one, comma-separated, for a day spanning projects
+    # The Charge column: "Week rate: <tag>", "Daily", "Hourly" or "Fixed price: <tag>".
+    charge: str
     qty: Decimal
     rate: Decimal  # in the invoice's currency
     amount: Decimal
     amount_aud: Decimal
     gst: Decimal | None  # None when not registered for GST
+
+    @property
+    def description(self) -> str:
+        """The line as one piece of text, as the ledger records it."""
+        return f"{self.project} — {self.charge}"
 
 
 @dataclass(frozen=True)
@@ -934,16 +1023,25 @@ class Invoice:
     fx_rate: Decimal  # AUD per unit of the client's currency; 1 at home
     gst_treatment: str  # domestic, export, or unregistered
     lines: tuple[Line, ...]
-    entries: tuple[Entry, ...]  # every row it covers, fixed-price ones included
+    entries: tuple[Entry, ...]  # the timesheet rows it covers, recorded under it
+    show_hours: dict[str, bool]  # from config.txt: billing type -> hours shown
+    # Fixed-price rows from earlier runs, already in the ledger with no invoice,
+    # shown in this invoice's work log because it charges their job.
+    carried: tuple[Entry, ...] = ()
+
+    def hours_shown(self, entry: Entry) -> bool:
+        return self.show_hours[entry.billing]
 
     @property
     def work_log(self) -> tuple[Entry, ...]:
-        """The rows the client sees. Fixed-price hours are internal only."""
-        return tuple(e for e in self.entries if e.billing != "fixed price")
+        """Every row the invoice covers, by date. Rows whose hours are hidden
+        still appear, with their billing type where the hours would be."""
+        return tuple(sorted((*self.entries, *self.carried), key=lambda e: e.date))
 
     @property
     def hours(self) -> Decimal:
-        return sum((e.hours for e in self.work_log), Decimal(0))
+        """The hours the work log shows, so its total never reveals hidden ones."""
+        return sum((e.hours for e in self.work_log if self.hours_shown(e)), Decimal(0))
 
     @property
     def subtotal(self) -> Decimal:
@@ -975,14 +1073,18 @@ def highest_invoice_number(ledger: Ledger, prefix: str) -> int:
 
 def charge_lines(entries: list[Entry], client: Client, card: RateCard,
                  fx: Decimal | None, gst_registered: bool) -> list[Line]:
-    """Price one client's month. `fx` is AUD per unit of a foreign currency.
+    """Price one client's month as one line per project and kind of charge.
 
-    Nothing aggregates across the month: a week is one tagged block, a day
-    is one date, and a fixed price is one row carrying an amount.
+    The charging rules work per block, never across the month: a week is one
+    tagged block, a day is one date, and a fixed price is the rows carrying
+    an amount. Only the invoice lines gather blocks up by project: each
+    booked week keeps its own line (it prints its tag), while days add up to
+    "2 days" and hours to "8.75 h". `fx` is AUD per unit of a foreign currency.
     """
     tier = card.rates[client.tier]
 
-    def priced(day: date, unit: str, description: str, qty: Decimal, rate: Decimal) -> Line:
+    def priced(day: date, unit: str, project: str, charge: str, qty: Decimal,
+               rate: Decimal) -> Line:
         amount = cents(qty * rate)  # rounded per line, the taxable-supply rule
         amount_aud = amount if fx is None else cents(amount * fx)
         if not gst_registered:
@@ -991,44 +1093,77 @@ def charge_lines(entries: list[Entry], client: Client, card: RateCard,
             gst = cents(amount * GST_RATE)
         else:
             gst = Decimal("0.00")
-        return Line(day, unit, description, qty, rate, amount, amount_aud, gst)
+        return Line(day, unit, project, charge, qty, rate, amount, amount_aud, gst)
 
-    def from_card(day: date, unit: str, description: str, qty: Decimal) -> Line:
+    def from_card(day: date, unit: str, project: str, charge: str, qty: Decimal) -> Line:
         # The rate card is in AUD; a foreign client's rate is converted at
         # the invoice date and rounded to the cent before multiplying.
         rate = tier[unit] if fx is None else cents(tier[unit] / fx)
-        return priced(day, unit, description, qty, rate)
+        return priced(day, unit, project, charge, qty, rate)
+
+    def projects(rows: list[Entry]) -> str:
+        return ", ".join(dict.fromkeys(r.project for r in rows))
 
     lines = []
     weeks: dict[str, list[Entry]] = {}
+    fixed: dict[tuple[str, str], list[Entry]] = {}
     hourly: dict[date, list[Entry]] = {}
     for e in entries:
         if e.billing == "week rate":
             weeks.setdefault(e.tag, []).append(e)
         elif e.billing == "fixed price":
-            if e.amount is not None:  # already in the client's own currency
-                lines.append(priced(e.date, "fixed", e.task, Decimal(1), e.amount))
+            if e.amount is not None:
+                fixed.setdefault((e.project, e.tag), []).append(e)
         else:
             hourly.setdefault(e.date, []).append(e)
 
     # Every row carrying one tag collapses into one week charge, however many
-    # hours or days it covers, and those rows bill nothing else.
+    # hours or days it covers, and those rows bill nothing else. An Amount on
+    # the week's rows is a custom price, in the client's own currency, used
+    # instead of the rate card (validate makes sure the rows agree on it).
     for tag, rows in weeks.items():
-        lines.append(from_card(min(r.date for r in rows), "week", tag, Decimal(1)))
+        first, charge = min(r.date for r in rows), f"Week rate: {tag}"
+        custom = next((r.amount for r in rows if r.amount is not None), None)
+        if custom is None:
+            lines.append(from_card(first, "week", projects(rows), charge, Decimal(1)))
+        else:
+            lines.append(priced(first, "week", projects(rows), charge, Decimal(1), custom))
 
-    # Only plain hourly rows count toward a day: week and fixed-price hours
-    # are already paid for.
+    # Amounts are already in the client's own currency.
+    for (project, tag), rows in fixed.items():
+        lines.append(priced(min(r.date for r in rows), "fixed", project, f"Fixed price: {tag}",
+                            Decimal(1), sum((r.amount for r in rows), Decimal(0))))
+
+    # The day rule is per client per date, across projects. Only plain hourly
+    # rows count toward it: week and fixed-price hours are already paid for. A
+    # day that spans projects names all of them, so does its remainder.
+    blocks: dict[tuple[str, str], tuple[date, Decimal]] = {}
+
+    def add(project: str, unit: str, day: date, qty: Decimal) -> None:
+        first, total = blocks.get((project, unit), (day, Decimal(0)))
+        blocks[(project, unit)] = (min(first, day), total + qty)
+
     day_hours = card.block_hours["day"]
-    for day, rows in hourly.items():
+    for day, rows in sorted(hourly.items()):
         hours = sum((r.hours for r in rows), Decimal(0))
-        label = f"{short_date(day)} — " + "; ".join(dict.fromkeys(r.task for r in rows))
         if hours >= day_hours:
-            lines.append(from_card(day, "day", f"{label} (daily rate)", Decimal(1)))
-            hours -= day_hours
-        if hours > 0:
-            lines.append(from_card(day, "hour", f"{label} (hourly rate)", hours))
+            add(projects(rows), "day", day, Decimal(1))
+            if hours > day_hours:
+                add(projects(rows), "hour", day, hours - day_hours)
+        else:
+            for r in rows:
+                if r.hours:
+                    add(r.project, "hour", day, r.hours)
+    names = {"day": "Daily", "hour": "Hourly"}
+    for (project, unit), (first, qty) in blocks.items():
+        lines.append(from_card(first, unit, project, names[unit], qty))
 
-    lines.sort(key=lambda line: (line.date, _LINE_ORDER[line.unit]))
+    # Projects in the order they first appear, then week, day, hourly, fixed.
+    first_seen: dict[str, date] = {}
+    for line in sorted(lines, key=lambda line: line.date):
+        first_seen.setdefault(line.project, line.date)
+    lines.sort(key=lambda line: (first_seen[line.project], line.project,
+                                 _LINE_ORDER[line.unit], line.date))
     return lines
 
 
@@ -1070,6 +1205,64 @@ def week_report(entries: tuple[Entry, ...], card: RateCard) -> list[str]:
     return report
 
 
+def carry_forward(groups: dict[tuple[date, str], list[Entry]],
+                  ledger: Ledger) -> dict[tuple[date, str], list[Entry]]:
+    """Move uncharged fixed-price rows onto the next invoice that charges their project.
+
+    Fixed-price work between payments is logged with no amount, often over
+    months with nothing to charge, which make no invoice of their own. Those
+    rows go on the invoice of the next fixed-price charge on the same project
+    for the same client, whatever that charge's tag: tags name payments
+    ("Lantern design (50% payment)"), so the waiting rows carry the previous
+    payment's tag. Rows in this timesheet move to that invoice and are recorded
+    under it. Rows that earlier runs logged with no invoice, still waiting in
+    the ledger, are shown on it too. Returns those ledger rows for each invoice
+    group. `groups` is changed in place.
+    """
+    charges: dict[tuple[str, str], list[tuple[date, tuple[date, str]]]] = {}
+    for key, rows in groups.items():
+        for e in rows:
+            if e.billing == "fixed price" and e.amount is not None:
+                charges.setdefault((key[1], e.project), []).append((e.date, key))
+    for dates in charges.values():
+        dates.sort()
+
+    def next_charge(job: tuple[str, str], day: date) -> tuple[date, str] | None:
+        return next((key for charged, key in charges.get(job, []) if charged >= day), None)
+
+    for key, rows in list(groups.items()):
+        charged_here = {e.project for e in rows
+                        if e.billing == "fixed price" and e.amount is not None}
+        for e in list(rows):
+            if e.billing == "fixed price" and e.amount is None and e.project not in charged_here:
+                target = next_charge((key[1], e.project), e.date)
+                if target is not None:
+                    rows.remove(e)
+                    groups[target].append(e)
+    for key in [k for k, rows in groups.items() if not rows]:
+        del groups[key]
+
+    # A logged row dated before the project's last invoiced fixed-price row
+    # was carried onto that invoice already.
+    last_invoiced: dict[tuple[str, str], date] = {}
+    for w in ledger.work:
+        if w.billing_type == "fixed price" and w.invoice_no:
+            job = (w.client, w.project)
+            last_invoiced[job] = max(last_invoiced.get(job, w.date), w.date)
+    from_ledger: dict[tuple[date, str], list[Entry]] = {}
+    for w in ledger.work:
+        if w.billing_type != "fixed price" or w.invoice_no:
+            continue
+        job = (w.client, w.project)
+        if job in last_invoiced and w.date <= last_invoiced[job]:
+            continue
+        target = next_charge(job, w.date)
+        if target is not None:
+            from_ledger.setdefault(target, []).append(
+                Entry(w.date, w.hours, w.task, w.project, w.billing_type, w.tag, None, ""))
+    return from_ledger
+
+
 def compute(inputs: Inputs) -> Batch:
     """Cut the checked inputs into invoices: one per client per work month."""
     config, card = inputs.config, inputs.rates
@@ -1079,6 +1272,7 @@ def compute(inputs: Inputs) -> Batch:
     groups: dict[tuple[date, str], list[Entry]] = {}
     for e in inputs.entries:
         groups.setdefault((e.date.replace(day=1), owner[e.project].name), []).append(e)
+    carried = carry_forward(groups, inputs.ledger)
 
     # Numbered in date order: by month, then client name within a month.
     number = highest_invoice_number(inputs.ledger, config.number_prefix)
@@ -1102,6 +1296,8 @@ def compute(inputs: Inputs) -> Batch:
             gst_treatment=client.gst_treatment if config.gst_registered else "unregistered",
             lines=tuple(lines),
             entries=tuple(entries),
+            show_hours=config.show_hours,
+            carried=tuple(carried.get((month, name), ())),
         ))
     return Batch(tuple(invoices), tuple(logged_only), tuple(week_report(inputs.entries, card)))
 
@@ -1147,18 +1343,30 @@ def invoice_context(inv: Invoice, config: Config, draft: bool) -> dict:
         "client": {"name": client.name, "care_of": client.care_of, "address": client.address,
                    "email": client.email, "reference": client.reference,
                    "currency": client.currency, "gst_treatment": client.gst_treatment},
-        "charges": [{"description": l.description, "qty": fmt_hours(l.qty),
-                     "rate": l.rate, "amount": l.amount} for l in inv.lines],
+        "charges": [{"project": l.project, "charge": l.charge, "qty": quantity(l),
+                     "rate": None if l.unit == "fixed" else l.rate, "amount": l.amount}
+                    for l in inv.lines],
         "totals": {"subtotal": inv.subtotal, "gst": inv.gst, "total": inv.total,
-                   "hours": fmt_hours(inv.hours)},
+                   "hours": fmt_hours(inv.hours),
+                   "has_hours": any(inv.hours_shown(e) for e in inv.work_log)},
         "pay": config.payment[client.currency],
         "payment": {"note": config.payment_note},
         "terms_days": config.terms_days,
-        # Week and hourly rows only: fixed-price hours never reach the client.
+        # Every row; one whose hours are hidden shows its billing type instead.
         "work": [{"date": f"{e.date.day} {e.date:%b %Y}", "project": e.project,
-                  "task": e.task, "hours": fmt_hours(e.hours)}
-                 for e in sorted(inv.work_log, key=lambda e: e.date)],
+                  "task": e.task,
+                  "hours": fmt_hours(e.hours) if inv.hours_shown(e) else e.billing}
+                 for e in inv.work_log],
     }
+
+
+def quantity(line: Line) -> str:
+    """The Qty column: 1 week, 2 days, 8.75 h, or nothing for a fixed price."""
+    if line.unit == "fixed":
+        return ""
+    if line.unit == "hour":
+        return f"{fmt_hours(line.qty)} h"
+    return f"{fmt_hours(line.qty)} {line.unit}{'' if line.qty == 1 else 's'}"
 
 
 def render_html(env: jinja2.Environment, inv: Invoice, config: Config, draft: bool) -> str:
@@ -1223,6 +1431,13 @@ def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
                        f"{inv.client.currency}  {inv.total:>12,.2f}")
     else:
         out.append("  No invoices: nothing in timesheet.txt charges anything this run.")
+
+    # A reminder of what the work log will show, for the kinds of row in this run.
+    kinds = [k for k in ("fixed price", "week rate")
+             if any(e.billing == k for inv in batch.invoices for e in inv.entries)]
+    if kinds:
+        shown = ", ".join(f"{k} {'shown' if config.show_hours[k] else 'hidden'}" for k in kinds)
+        out += ["", f"Hours on the invoices: {shown} (set in config.txt)"]
 
     if batch.week_report:
         out += ["", "Booked weeks", *batch.week_report]
@@ -1307,7 +1522,8 @@ def ledger_rows(batch: Batch, config: Config) -> list[list[str]]:
     def work(e: Entry, client: Client, number: str) -> list[str]:
         return row(row_type="work", invoice_no=number, invoice_date=issued, client=client.name,
                    date=e.date.isoformat(), hours=fmt_hours(e.hours), task=e.task,
-                   project=e.project, billing_type=e.billing, ref=client.reference)
+                   project=e.project, billing_type=e.billing, ref=client.reference,
+                   description=e.tag)
 
     rows = []
     for inv in batch.invoices:

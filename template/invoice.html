@@ -51,11 +51,13 @@
     </p>
   </section>
 
-  {# Charge rows: one per invoice line. This is what is billed. #}
+  {# Charge rows: the cost breakdown, one per project and kind of charge.
+     The hours behind them are on the next page. #}
   <table class="charges">
     <thead>
       <tr>
-        <th class="desc">Description</th>
+        <th class="project">Project</th>
+        <th class="desc">Charge</th>
         <th class="num">Qty</th>
         <th class="num">Rate</th>
         <th class="num">Amount</th>
@@ -64,9 +66,10 @@
     <tbody>
       {% for line in charges %}
       <tr>
-        <td class="desc">{{ line.description }}</td>
+        <td class="project">{{ line.project }}</td>
+        <td class="desc">{{ line.charge }}</td>
         <td class="num">{{ line.qty }}</td>
-        <td class="num">{{ line.rate | money }}</td>
+        <td class="num">{% if line.rate is not none %}{{ line.rate | money }}{% endif %}</td>
         <td class="num">{{ line.amount | money }}</td>
       </tr>
       {% endfor %}
@@ -74,23 +77,23 @@
     <tfoot>
       {% if tax.gst_registered %}
         <tr>
-          <th colspan="3">Subtotal</th>
+          <th colspan="4">Subtotal</th>
           <td class="num">{{ totals.subtotal | money }}</td>
         </tr>
         {% if client.gst_treatment == "export" %}
           <tr class="gst">
-            <th colspan="3">GST (GST-free export)</th>
+            <th colspan="4">GST (GST-free export)</th>
             <td class="num">{{ 0 | money }}</td>
           </tr>
         {% else %}
           <tr class="gst">
-            <th colspan="3">GST ({{ (tax.gst_rate * 100) | round | int }}%)</th>
+            <th colspan="4">GST ({{ (tax.gst_rate * 100) | round | int }}%)</th>
             <td class="num">{{ totals.gst | money }}</td>
           </tr>
         {% endif %}
       {% endif %}
       <tr class="total">
-        <th colspan="3">Total {{ client.currency }}</th>
+        <th colspan="4">Total {{ client.currency }}</th>
         <td class="num">{{ totals.total | money }}</td>
       </tr>
     </tfoot>
@@ -131,10 +134,10 @@
     <p class="paynote">{{ payment.note }}</p>
   </section>
 
-  {# Work rows: the audit trail. No amounts — the charges table above carries those.
-     The script excludes fixed-price rows from `work`: a fixed price buys a
-     deliverable, not time, so its hours are internal and never printed here.
-     If `work` is empty the whole section is dropped. #}
+  {# Work rows: the audit trail, every row the invoice covers. No amounts — the
+     charges table above carries those. A plain fixed-price row shows "fixed
+     price" instead of its hours: a fixed price buys a deliverable, not time.
+     The total counts only the hours shown, and is left out if there are none. #}
   {% if work %}
   <section class="worklog">
     <h3>Work completed</h3>
@@ -157,12 +160,14 @@
         </tr>
         {% endfor %}
       </tbody>
+      {% if totals.has_hours %}
       <tfoot>
         <tr>
           <th colspan="3">Total hours</th>
           <td class="num">{{ totals.hours }}</td>
         </tr>
       </tfoot>
+      {% endif %}
     </table>
   </section>
   {% endif %}

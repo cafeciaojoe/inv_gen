@@ -82,7 +82,7 @@ def test_business_address_keeps_its_lines(render):
 
 def test_amounts_and_currency(render):
     html = render("INV-0004")
-    assert "5,517.24" in html and "Total SEK" in html and "9,448.30" in html
+    assert "5,517.24" in html and "Total SEK" in html and "9,448.29" in html
     assert "<th>Issued</th><td>11 December 2026</td>" in html
     assert "<th>Due</th><td>10 January 2027</td>" in html
     assert "<th>Period</th><td>November 2026</td>" in html
@@ -96,15 +96,42 @@ def test_payment_block_matches_currency(render):
     assert "Please quote the invoice number as the payment reference." in aud
 
 
-def test_work_log_leaves_out_fixed_price_rows(render):
+def test_cost_breakdown_has_project_and_charge_columns(render):
+    html = render("INV-0003")
+    assert ('<td class="project">Stage Lantern</td>\n'
+            '        <td class="desc">Week rate: Lantern build week — agreed 14 Oct</td>\n'
+            '        <td class="num">1 week</td>') in html
+    assert '<td class="desc">Daily</td>\n        <td class="num">1 day</td>' in html
+    assert '<td class="desc">Hourly</td>\n        <td class="num">8.75 h</td>' in html
+    assert "(hourly rate)" not in html and "Lantern rework after preview</td>" in worklog(html)
+
+
+def test_fixed_price_line_has_no_qty_or_rate(render):
+    html = render("INV-0007")
+    assert ('<td class="desc">Fixed price: Tool wall build (100% payment)</td>\n'
+            '        <td class="num"></td>\n'
+            '        <td class="num"></td>\n'
+            '        <td class="num">2,000.00</td>') in html
+
+
+def test_work_log_shows_fixed_price_rows_without_their_hours(render):
     log = worklog(render("INV-0005"))
-    assert "Safety signage for the tool wall" in log
-    assert "Tool wall first panels" not in log and "Tool wall layout" not in log
-    assert "Total hours" in log and ">5</td>" in log
+    assert "Tool wall layout and CAD" in log and "Tool wall first panels" in log
+    assert log.count('<td class="num">fixed price</td>') == 2
+    assert "Total hours" in log and '<td class="num">5</td>' in log
 
 
-def test_work_log_dropped_when_empty(render):
-    assert worklog(render("INV-0007")) == ""
+def test_work_log_without_any_hours_shown_has_no_total(render):
+    log = worklog(render("INV-0007"))
+    assert log.count('<td class="num">fixed price</td>') == 2
+    assert "Total hours" not in log
+
+
+def test_hidden_week_rate_hours(folder, render):
+    folder.edit("config.txt", "show_week_rate_hours = true", "show_week_rate_hours = false")
+    log = worklog(render("INV-0003"))
+    assert log.count('<td class="num">week rate</td>') == 9
+    assert '<td class="num">16.75</td>' in log  # hourly hours only
 
 
 def test_task_text_is_escaped(folder, render):

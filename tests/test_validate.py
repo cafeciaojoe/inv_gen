@@ -46,7 +46,7 @@ def test_truncated_clients_paste_refuses_every_orphaned_row(folder):
 
 def test_double_paste_within_one_batch(folder):
     folder.append("timesheet.txt",
-                  "| September 7, 2026 | 2.0 | Lantern concept sketches | Stage Lantern |  |  |\n")
+                  "| September 7, 2026 | 2.0 | Lantern concept sketches | Stage Lantern |  |  |  |\n")
     error = only_error(folder)
     assert error.startswith("timesheet.txt — the same line appears more than once\n")
     assert error.count("\n  | September 7, 2026") == 2  # both rows, verbatim
@@ -85,6 +85,19 @@ def test_week_tag_on_two_clients(folder):
     )
 
 
+def test_week_rows_disagreeing_on_a_custom_price(folder):
+    folder.edit("timesheet.txt", NOV_6_WEEK + " Lantern build week — agreed 14 Oct |  |",
+                NOV_6_WEEK + " Lantern build week — agreed 14 Oct | 2500 |")
+    folder.edit("timesheet.txt", "| November 5, 2026 | 6 | Wiring and diffuser fitting | "
+                "Stage Lantern  | week rate | Lantern build week — agreed 14 Oct |  |",
+                "| November 5, 2026 | 6 | Wiring and diffuser fitting | "
+                "Stage Lantern  | week rate | Lantern build week — agreed 14 Oct | 2400 |")
+    assert only_error(folder).startswith(
+        'timesheet.txt — week rate tag "Lantern build week — agreed 14 Oct" has different '
+        "Amounts on its rows"
+    )
+
+
 def test_week_tag_spanning_two_months(folder):
     folder.edit("timesheet.txt", "| November 2, 2026 | 8 |", "| October 30, 2026 | 8 |")
     error = only_error(folder)
@@ -99,6 +112,17 @@ def test_week_tag_already_billed_even_with_other_capitals(folder):
                   "TEST,3000.00,base,domestic,0.00\n")
     assert only_error(folder).startswith(
         'timesheet.txt — week rate tag "Lantern build week — agreed 14 Oct" '
+        "was already billed, on INV-0002"
+    )
+
+
+def test_week_tag_already_billed_found_on_ledger_work_rows(folder):
+    folder.append("ledger.csv",
+                  "work,INV-0002,2026-10-31,Bluegum Theatre Company,2026-10-20,8,Earlier build,"
+                  "Stage Lantern,week rate,PO BT-0001,Lantern install week — agreed 14 Oct"
+                  + "," * 12 + "\n")
+    assert only_error(folder).startswith(
+        'timesheet.txt — week rate tag "Lantern install week — agreed 14 Oct" '
         "was already billed, on INV-0002"
     )
 

@@ -203,14 +203,18 @@ def test_unknown_tier_in_rates(folder):
     ("| Lantern concept sketches |", "|  |", "empty Task"),
     ("| Supplier quotes | Wave Bench |  |", "| Supplier quotes | Wave Bench | weekly |",
      'unknown Billing type value "weekly"'),
-    ("| Supplier quotes | Wave Bench |  |  |", "| Supplier quotes | Wave Bench |  | 200 |",
-     '"200" is filled in but Billing type is empty'),
+    ("| Supplier quotes | Wave Bench |  |  |  |", "| Supplier quotes | Wave Bench |  | quotes |  |",
+     'tag "quotes" is filled in but Billing type is empty'),
+    ("| Supplier quotes | Wave Bench |  |  |  |", "| Supplier quotes | Wave Bench |  |  | 200 |",
+     'Amount "200" is filled in but Billing type is empty'),
     ("| Diffuser fitting | Stage Lantern | week rate | Lantern build week — agreed 14 Oct |",
-     "| Diffuser fitting | Stage Lantern | week rate | 3000 |", 'week rate tag "3000" is a number'),
+     "| Diffuser fitting | Stage Lantern | week rate | 3000 |", 'tag "3000" is a number'),
     ("| Diffuser fitting | Stage Lantern | week rate | Lantern build week — agreed 14 Oct |",
      "| Diffuser fitting | Stage Lantern | week rate |  |", "week rate row has no tag"),
-    ("| fixed price | 2000 |", "| fixed price | two thousand |",
-     'fixed price amount "two thousand" is not an amount'),
+    ("| Tool wall revisions | Tool Wall | fixed price | Tool wall build (50% payment) |",
+     "| Tool wall revisions | Tool Wall | fixed price |  |", "fixed price row has no tag"),
+    ("(100% payment) | 2000 |", "(100% payment) | two thousand |",
+     'Amount "two thousand" is not an amount'),
 ])
 def test_bad_timesheet_rows(folder, old, new, problem):
     folder.edit("timesheet.txt", old, new)
@@ -219,10 +223,53 @@ def test_bad_timesheet_rows(folder, old, new, problem):
 
 def test_zero_hours_and_comma_amounts_are_fine(folder):
     folder.edit("timesheet.txt", "| November 6, 2026 | 5 |", "| November 6, 2026 | 0 |")
-    folder.edit("timesheet.txt", "| fixed price | 2000 |", "| fixed price | $2,000.00 |")
+    folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) | $2,000.00 |")
     entries = folder.load()[0].entries
     assert any(e.hours == 0 for e in entries)
     assert any(e.amount == Decimal("2000.00") for e in entries)
+
+
+def test_old_layout_without_an_amount_column_is_refused(folder):
+    lines = (folder.path / "timesheet.txt").read_text().splitlines()
+    old = ["|".join(line.split("|")[:-2]) + "|" for line in lines]  # drop the last column
+    (folder.path / "timesheet.txt").write_text("\n".join(old) + "\n")
+    assert only_error(folder).startswith('timesheet.txt — no column starts with "Amount"')
+
+
+def test_hours_settings_default_to_fixed_hidden_week_shown(folder):
+    folder.edit("config.txt", "show_fixed_price_hours = false\n", "")
+    folder.edit("config.txt", "show_week_rate_hours = true\n", "")
+    assert folder.load()[0].config.show_hours == {
+        "": True, "week rate": True, "fixed price": False}
+
+
+def test_setting_added_at_the_end_of_the_file_is_refused(folder):
+    # The last section is [payment.SEK], so this line lands there, not under [invoicing].
+    folder.edit("config.txt", "show_fixed_price_hours = false\n", "")
+    folder.append("config.txt", "\nshow_fixed_price_hours = true\n")
+    assert only_error(folder) == (
+        "config.txt — show_fixed_price_hours is under [payment.SEK], but it belongs under "
+        "[invoicing]. A setting belongs to the [section] above it, so one added at the end "
+        "of the file lands in the last section."
+    )
+
+
+def test_unknown_setting_is_refused(folder):
+    folder.edit("config.txt", "payment_terms_days = 30", "payment_terms_days = 30\npayment_term = 14")
+    assert only_error(folder) == (
+        "config.txt — payment_term under [invoicing] is not a setting the script knows")
+
+
+def test_old_paths_section_is_refused_with_a_reason(folder):
+    folder.append("config.txt", '\n[paths]\npreview_folder = "~/invoice-preview"\n')
+    assert only_error(folder).startswith("config.txt — [paths] is no longer used")
+
+
+def test_hours_settings_can_flip(folder):
+    folder.edit("config.txt", "show_fixed_price_hours = false", "show_fixed_price_hours = true")
+    folder.edit("config.txt", "show_week_rate_hours = true", "show_week_rate_hours = false")
+    assert folder.load()[0].config.show_hours == {
+        "": True, "week rate": False, "fixed price": True}
 
 
 def test_every_bad_row_is_reported_in_one_run(folder):

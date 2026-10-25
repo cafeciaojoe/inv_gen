@@ -64,8 +64,8 @@ def test_final_pdfs_are_rerendered_without_the_draft_flag(folder, monkeypatch):
 def test_ledger_rows(folder):
     commit_run(folder)
     rows = ledger(folder)
-    assert len(rows) == 26 + 19  # every timesheet row, plus every invoice line
-    assert [r["row_type"] for r in rows[:6]] == ["work", "work", "charge", "charge", "work", "work"]
+    assert len(rows) == 26 + 14  # every timesheet row, plus every invoice line
+    assert [r["row_type"] for r in rows[:6]] == ["work", "work", "charge", "work", "work", "work"]
 
     work = rows[0]
     assert {k: work[k] for k in ("invoice_no", "invoice_date", "client", "date", "hours", "task",
@@ -75,18 +75,21 @@ def test_ledger_rows(folder):
         "task": "Lantern concept sketches", "project": "Stage Lantern", "billing_type": "",
         "ref": "PO BT-0001", "amount": ""}
 
-    sek = next(r for r in rows if r["description"] == "20 Nov — Shade test print (hourly rate)")
+    sek = next(r for r in rows if r["description"] == "Aurora Lamp — Hourly")
     assert {k: sek[k] for k in ("unit", "qty", "rate", "amount", "currency", "fx_rate", "fx_date",
                                 "fx_source", "amount_aud", "tier", "gst_treatment",
                                 "gst_amount")} == {
-        "unit": "hour", "qty": "1.5", "rate": "827.59", "amount": "1241.39", "currency": "SEK",
+        "unit": "hour", "qty": "4.75", "rate": "827.59", "amount": "3931.05", "currency": "SEK",
         "fx_rate": "0.1450", "fx_date": "2026-12-11",
-        "fx_source": "TEST DATA — not a real rate source", "amount_aud": "180.00",
+        "fx_source": "TEST DATA — not a real rate source", "amount_aud": "570.00",
         "tier": "base", "gst_treatment": "unregistered", "gst_amount": ""}
 
     week = next(r for r in rows if r["unit"] == "week")
     assert (week["description"], week["rate"], week["fx_rate"], week["fx_source"]) == (
-        "Lantern build week — agreed 14 Oct", "3000.00", "1", "")
+        "Stage Lantern — Week rate: Lantern build week — agreed 14 Oct", "3000.00", "1", "")
+    # Work rows keep their tag, which is how a billed week is recognised later.
+    week_work = next(r for r in rows if r["row_type"] == "work" and r["billing_type"] == "week rate")
+    assert week_work["description"] == "Lantern build week — agreed 14 Oct"
     fixed = next(r for r in rows if r["unit"] == "fixed")
     assert (fixed["rate"], fixed["amount"]) == ("1500.00", "1500.00")
 
@@ -103,7 +106,7 @@ def test_gst_columns_once_registered(folder):
     rows = [r for r in ledger(folder) if r["row_type"] == "charge"]
     dom = [r for r in rows if r["invoice_no"] == "INV-0003"]
     assert {r["gst_treatment"] for r in dom} == {"domestic"}
-    assert [r["gst_amount"] for r in dom] == ["300.00", "48.00", "300.00", "80.00", "18.00", "39.00"]
+    assert [r["gst_amount"] for r in dom] == ["300.00", "300.00", "80.00", "105.00"]
     exp = [r for r in rows if r["invoice_no"] == "INV-0004"]
     assert {(r["gst_treatment"], r["gst_amount"]) for r in exp} == {("export", "0.00")}
 
@@ -116,10 +119,10 @@ def test_summary_csv(folder):
         "2026-09,Tidewater Labs,INV-0002,2026-12,9.25,712.50,,712.50\n"
         "2026-09,Total,,,12.5,1102.50,,1102.50\n"
         "2026-11,Bluegum Theatre Company,INV-0003,2026-12,94.75,7850.00,,7850.00\n"
-        "2026-11,Fjordlight AB,INV-0004,2026-12,12.75,,9448.30,1370.00\n"
+        "2026-11,Fjordlight AB,INV-0004,2026-12,12.75,,9448.29,1370.00\n"
         "2026-11,Northside Makers Trust,INV-0005,2026-12,14.5,1800.00,,1800.00\n"
         "2026-11,Tidewater Labs,INV-0006,2026-12,2,180.00,,180.00\n"
-        "2026-11,Total,,,124,9830.00,9448.30,11200.00\n"
+        "2026-11,Total,,,124,9830.00,9448.29,11200.00\n"
         "2026-12,Northside Makers Trust,INV-0007,2026-12,11.25,2000.00,,2000.00\n"
         "2026-12,Total,,,11.25,2000.00,,2000.00\n"
         "\n"
@@ -141,7 +144,7 @@ def test_commit_prints_what_it_kept(folder, capsys):
     commit_run(folder)
     out = capsys.readouterr().out
     assert "Committed 7 invoices:\n  invoices/2026-09/INV-0001.pdf\n" in out
-    assert out.endswith("ledger.csv: 45 rows added.\n"
+    assert out.endswith("ledger.csv: 40 rows added.\n"
                         "summary.csv: replaced with the one in the preview.\n")
 
 
@@ -156,7 +159,7 @@ def test_discarding_leaves_the_old_summary(folder):
     before = (folder.path / "summary.csv").read_bytes()
     header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
     (folder.path / "timesheet.txt").write_text("\n".join(header + [
-        "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |"]) + "\n")
+        "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |  |"]) + "\n")
     preview = {}
     commit_run(folder, answer="no", preview=preview)
     assert preview["summary.csv"] != before  # the preview showed the would-be summary
@@ -199,7 +202,7 @@ def test_next_month_continues_the_numbering(folder):
     commit_run(folder)
     header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
     (folder.path / "timesheet.txt").write_text("\n".join(header + [
-        "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |"]) + "\n")
+        "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |  |"]) + "\n")
     assert commit_run(folder) == EXIT_COMMITTED
     assert pdfs_on_disk(folder)["invoices/2026-12"] == ["INV-0007.pdf", "INV-0008.pdf"]
     summary = (folder.path / "summary.csv").read_text()
@@ -207,7 +210,7 @@ def test_next_month_continues_the_numbering(folder):
 
 
 def test_month_with_nothing_charged_is_logged_without_an_invoice(folder):
-    folder.edit("timesheet.txt", "| fixed price | 2000 |", "| fixed price |  |")
+    folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) |  |")
     commit_run(folder)
     logged = [r for r in ledger(folder) if r["invoice_no"] == ""]
     assert [(r["date"], r["hours"], r["invoice_date"]) for r in logged] == [
@@ -275,7 +278,7 @@ def test_the_last_rename_failing_keeps_the_commit(folder, monkeypatch, capsys):
         real_replace(src, dst)
     monkeypatch.setattr(make_invoices.os, "replace", replace)
     assert commit_run(folder) == EXIT_COMMITTED
-    assert len(ledger(folder)) == 45 and pdfs_on_disk(folder) == PDFS
+    assert len(ledger(folder)) == 40 and pdfs_on_disk(folder) == PDFS
     assert "summary.csv could not be replaced (pCloud hiccup)" in capsys.readouterr().err
     assert not [p.name for p in folder.path.iterdir() if p.name.endswith(".tmp")]
 
@@ -283,3 +286,12 @@ def test_the_last_rename_failing_keeps_the_commit(folder, monkeypatch, capsys):
 def test_no_temporary_files_left_behind(folder):
     commit_run(folder)
     assert not [p.name for p in folder.path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_rows_carried_from_an_earlier_month_are_recorded_under_the_invoice(folder):
+    folder.append("timesheet.txt",
+                  "| October 20, 2026 | 5 | Tool wall sketches | Tool Wall | fixed price | "
+                  "Tool wall build (50% payment) |  |\n")
+    commit_run(folder)
+    row = next(r for r in ledger(folder) if r["task"] == "Tool wall sketches")
+    assert row["invoice_no"] == "INV-0005" and row["date"] == "2026-10-20"

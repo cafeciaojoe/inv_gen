@@ -64,10 +64,34 @@ the numbering carries on from them.
    balance was forgotten), and your turnover against the GST threshold.
 5. **Type `commit`** to keep them, or anything else to throw them away. Closing the
    window also throws them away. Either way, the draft folder is deleted. Then press
-   `r` to run again, or close the window.
+   `r` to run again, or Enter to exit the script. After Enter, the window closes with
+   one click, without Terminal asking to terminate anything.
 6. **Send the invoices** from `invoices/YYYY-MM/`.
 7. **Mark the rows as billed in Notion**, so they aren't pasted again next month.
    If they are, the script refuses them as duplicates anyway.
+
+### The timesheet
+
+Your Notion timesheet needs these columns. Extra words after a column's name are
+fine, like the reminder in `Billing type (Week rate / Fixed Price)`:
+
+| Date | Hours | Task | Project | Billing type | Week rate tag / Fixed price tag | Amount |
+| --- | --- | --- | --- | --- | --- | --- |
+
+| Billing type | Tag | Amount |
+| --- | --- | --- |
+| *(empty)*: hourly | empty | empty |
+| `week rate` | names the booked week, the same on every row of it, e.g. `Lantern build week — agreed 14 Oct` | empty for the rate card's week price, or a custom price for that week |
+| `fixed price` | names the agreement, e.g. `Tool wall build` | on the row that charges, e.g. `1500`; empty on rows that only log hours |
+
+The tags print on page 1 of the invoice, so a fixed-price tag can name the payment:
+`Lantern design (50% payment)`, then `Lantern design (100% payment)` for the next
+one. A fixed-price payment with no hours of its own takes `0` in Hours.
+
+Fixed-price rows without an amount, logged between payments, appear on page 2 of
+the next invoice that charges a fixed price on the same project, even months later,
+whatever their tag. Any fixed-price charge on the project counts, so a `Material costs`
+charge in between would collect them instead.
 
 ### When it refuses
 
@@ -91,6 +115,8 @@ The usual ones:
 
 | Message | What to do |
 | --- | --- |
+| no column starts with "Amount" | Add an Amount column to your Notion timesheet (see [The timesheet](#the-timesheet)). |
+| … row has no tag | Every week rate and fixed price row needs a tag; it prints on the invoice. |
 | Hours "-" is not a number | Hours must be a number. For a fixed-price payment with no hours, put `0`. |
 | unknown Project value | The project isn't in Active Projects in your Clients table. Add it, or fix the spelling. |
 | this line may already be billed | You pasted a row that's already in the ledger. Leave it out. If it really is new work, make its Task text different. |
@@ -131,6 +157,28 @@ work was done, with the month it was invoiced, hours, the amount in each currenc
 you invoiced in (AUD, SEK), everything added up in AUD, a total per month, and your
 rolling 12-month turnover. It opens in Numbers.
 
+## What the client sees
+
+Page 1 is the cost breakdown: one line per project and kind of charge, such as
+`Week rate: <tag>`, `Daily`, `Hourly` or `Fixed price: <tag>`. Page 2,
+"Work completed", lists every row with its date, project and task.
+
+By default it shows the hours of hourly and week-rate rows, and hides them on
+fixed-price rows, which say "fixed price" instead. To change that, add these two
+lines to `config.txt` **under the existing `[invoicing]` heading**, next to
+`payment_terms_days`. Not at the end of the file: a setting belongs to the
+`[section]` above it, so at the end it would land in the last payment block. The
+script refuses it there and says where it belongs.
+
+```toml
+[invoicing]
+show_fixed_price_hours = false   # true, e.g. for a block of prepaid hours
+show_week_rate_hours = true      # false, e.g. for a week sold as a deliverable
+```
+
+The Terminal summary reminds you how they're set whenever an invoice has those
+kinds of row. The total hours on page 2 only ever counts the hours it shows.
+
 ## Turning on GST
 
 Once you're registered, set `gst_registered = true` in `config.txt` and check that
@@ -160,6 +208,8 @@ the line.
   right-click it and choose Open once.
 - **"WeasyPrint could not load pango"**: run `brew install pango`.
 - **"uv is not installed"**: run `brew install uv pango`.
+- **"… is under [payment.SEK], but it belongs under [invoicing]"**: a setting was
+  added at the end of `config.txt`. Move it up under the section named.
 
 ## For developers
 

@@ -127,6 +127,7 @@ table.work td {
 }
 .desc { width: 100%; }
 .nowrap { white-space: nowrap; padding-right: 5mm !important; }
+.project { white-space: nowrap; padding-right: 5mm !important; }
 
 table.charges tfoot th {
   text-align: right;

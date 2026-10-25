@@ -1,28 +1,28 @@
-| Date | Hours | Task | Project | Billing type (Week rate / Fixed Price) | Week rate tag / Fixed price amount |
-| --- | --- | --- | --- | --- | --- |
-| September 7, 2026 | 2 | Lantern concept sketches | Stage Lantern  |  |  |
-| September 8, 2026 | 1.25 | Kick-off call | Stage Lantern |  |  |
-| September 9, 2026 | 5 | Bench frame CAD  | Wave Bench |  |  |
-| September 9, 2026 | 3.5 | Clock face prototype print | Tide Clock  |  |  |
-| September 10, 2026 | 0.75 | Supplier quotes | Wave Bench |  |  |
-| November 2, 2026 | 8 | Lantern frame build | Stage Lantern | week rate | Lantern build week — agreed 14 Oct  |
-| November 3, 2026 | 7.5 | Lantern frame build | Stage Lantern | week rate | Lantern build week — agreed 14 Oct |
-| November 4, 2026 | 8 | Lantern frame build, wiring | Stage Lantern | Week rate | Lantern build week — agreed 14 Oct |
-| November 5, 2026 | 6 | Wiring and diffuser fitting | Stage Lantern  | week rate | Lantern build week — agreed 14 Oct |
-| November 6, 2026 | 5 | Diffuser fitting | Stage Lantern | week rate | Lantern build week — agreed 14 Oct |
-| November 6, 2026 | 4 | Poster artwork files | Stage Lantern |  |  |
-| November 9, 2026 | 10 | Lantern install, rigging | Stage Lantern | week rate | Lantern install week — agreed 14 Oct |
-| November 10, 2026 | 11 | Lantern install, focusing | Stage Lantern | week rate | Lantern install week — agreed 14 Oct |
-| November 11, 2026 | 10.5 | Technical rehearsal support | Stage Lantern | week rate | Lantern install week — agreed 14 Oct |
-| November 12, 2026 | 12 | Opening night support, handover | Stage Lantern | week rate | Lantern install week — agreed 14 Oct  |
-| November 16, 2026 | 9.5 | Lantern rework after preview | Stage Lantern |  |  |
-| November 17, 2026 | 3.25 | Lantern rework | Stage Lantern  |  |  |
-| November 18, 2026 | 8.5 | Lamp shade modelling | Aurora Lamp |  |  |
-| November 19, 2026 | 2.75 | Review call | Aurora Lamp |  |  |
-| November 20, 2026 | 1.5 | Shade test print | Aurora Lamp |  |  |
-| November 23, 2026 | 6 | Tool wall layout and CAD | Tool Wall | fixed price |  |
-| November 24, 2026 | 2 | Clock mechanism testing | Tide Clock |  |  |
-| November 25, 2026 | 3.5 | Tool wall first panels — deposit | Tool Wall | Fixed price | 1500 |
-| November 25, 2026 | 5 | Safety signage for the tool wall | Tool Wall |  |  |
-| December 2, 2026 | 7 | Tool wall revisions | Tool Wall | fixed price |  |
-| December 9, 2026 | 4.25 | Tool wall finishing and delivery — balance | Tool Wall  | fixed price | 2000 |
+| Date | Hours | Task | Project | Billing type (Week rate / Fixed Price) | Week rate tag / Fixed price tag | Amount |
+| --- | --- | --- | --- | --- | --- | --- |
+| September 7, 2026 | 2 | Lantern concept sketches | Stage Lantern  |  |  |  |
+| September 8, 2026 | 1.25 | Kick-off call | Stage Lantern |  |  |  |
+| September 9, 2026 | 5 | Bench frame CAD  | Wave Bench |  |  |  |
+| September 9, 2026 | 3.5 | Clock face prototype print | Tide Clock  |  |  |  |
+| September 10, 2026 | 0.75 | Supplier quotes | Wave Bench |  |  |  |
+| November 2, 2026 | 8 | Lantern frame build | Stage Lantern | week rate | Lantern build week — agreed 14 Oct  |  |
+| November 3, 2026 | 7.5 | Lantern frame build | Stage Lantern | week rate | Lantern build week — agreed 14 Oct |  |
+| November 4, 2026 | 8 | Lantern frame build, wiring | Stage Lantern | Week rate | Lantern build week — agreed 14 Oct |  |
+| November 5, 2026 | 6 | Wiring and diffuser fitting | Stage Lantern  | week rate | Lantern build week — agreed 14 Oct |  |
+| November 6, 2026 | 5 | Diffuser fitting | Stage Lantern | week rate | Lantern build week — agreed 14 Oct |  |
+| November 6, 2026 | 4 | Poster artwork files | Stage Lantern |  |  |  |
+| November 9, 2026 | 10 | Lantern install, rigging | Stage Lantern | week rate | Lantern install week — agreed 14 Oct |  |
+| November 10, 2026 | 11 | Lantern install, focusing | Stage Lantern | week rate | Lantern install week — agreed 14 Oct |  |
+| November 11, 2026 | 10.5 | Technical rehearsal support | Stage Lantern | week rate | Lantern install week — agreed 14 Oct |  |
+| November 12, 2026 | 12 | Opening night support, handover | Stage Lantern | week rate | Lantern install week — agreed 14 Oct  |  |
+| November 16, 2026 | 9.5 | Lantern rework after preview | Stage Lantern |  |  |  |
+| November 17, 2026 | 3.25 | Lantern rework | Stage Lantern  |  |  |  |
+| November 18, 2026 | 8.5 | Lamp shade modelling | Aurora Lamp |  |  |  |
+| November 19, 2026 | 2.75 | Review call | Aurora Lamp |  |  |  |
+| November 20, 2026 | 1.5 | Shade test print | Aurora Lamp |  |  |  |
+| November 23, 2026 | 6 | Tool wall layout and CAD | Tool Wall | fixed price | Tool wall build (50% payment) |  |
+| November 24, 2026 | 2 | Clock mechanism testing | Tide Clock |  |  |  |
+| November 25, 2026 | 3.5 | Tool wall first panels | Tool Wall | Fixed price | Tool wall build (50% payment) | 1500 |
+| November 25, 2026 | 5 | Safety signage for the tool wall | Tool Wall |  |  |  |
+| December 2, 2026 | 7 | Tool wall revisions | Tool Wall | fixed price | Tool wall build (50% payment) |  |
+| December 9, 2026 | 4.25 | Tool wall finishing and delivery | Tool Wall  | fixed price | Tool wall build (100% payment) | 2000 |

@@ -78,7 +78,7 @@ def test_commit_then_the_same_timesheet_again(setup):
     assert "Committed 7 invoices:" in result.stdout
     assert sorted(p.name for p in (setup.path / "invoices").rglob("*.pdf")) == [
         f"INV-000{n}.pdf" for n in range(1, 8)]
-    assert len((setup.path / "ledger.csv").read_text().splitlines()) == 1 + 45
+    assert len((setup.path / "ledger.csv").read_text().splitlines()) == 1 + 40
     assert (setup.path / "summary.csv").read_text().startswith("work_month,client,")
     assert not os.path.exists(setup.opened()[0])
 
@@ -116,7 +116,7 @@ def test_double_click_launcher(setup):
 # deadlock it warns about needs the child to run Python code; this child execs
 # the launcher straight away.
 @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
-def test_launcher_runs_again_on_r(setup):
+def test_launcher_runs_again_on_r_and_exits_on_enter(setup):
     # A real terminal, so the launcher's one-key read works as it does in Terminal.
     pid, fd = pty.fork()
     if pid == 0:
@@ -133,11 +133,28 @@ def test_launcher_runs_again_on_r(setup):
             if select.select([fd], [], [], 1)[0]:
                 seen += os.read(fd, 4096)
 
+    def exit_status(timeout=10):
+        # Keep reading while waiting: macOS holds an exiting process until the
+        # last of its terminal output has been read.
+        nonlocal seen
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            done, status = os.waitpid(pid, os.WNOHANG)
+            if done:
+                return os.waitstatus_to_exitcode(status)
+            if select.select([fd], [], [], 0.1)[0]:
+                try:
+                    seen += os.read(fd, 4096)
+                except OSError:  # the launcher closed its end
+                    pass
+        return None
+
+    status = None
     try:
         wait_for("Type commit")
         os.write(fd, b"no\n")
-        wait_for("Press r to run again, or close this window.")
-        os.write(fd, b"x")  # anything but r is ignored
+        wait_for("Press r to run again, or Enter to exit the script.")
+        os.write(fd, b"x")  # anything but r or Enter is ignored
         time.sleep(1)
         assert seen.count(b"Type commit") == 1
         os.write(fd, b"r")
@@ -145,8 +162,12 @@ def test_launcher_runs_again_on_r(setup):
         os.write(fd, b"no\n")
         wait_for("Discarded. Nothing was written.", times=2)
         wait_for("Press r to run again", times=2)
+        os.write(fd, b"\r")  # Enter
+        status = exit_status()
     finally:
-        os.kill(pid, signal.SIGHUP)  # what closing the window sends
-        os.waitpid(pid, 0)
-        os.close(fd)
+        os.close(fd)  # first, so nothing is left waiting to be read
+        if status is None:
+            os.kill(pid, signal.SIGHUP)  # what closing the window sends
+            os.waitpid(pid, 0)
+    assert status == 0  # ended by itself, so closing the window asks nothing
     assert not (setup.path / "invoices").exists()

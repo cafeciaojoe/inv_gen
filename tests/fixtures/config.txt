@@ -65,6 +65,13 @@ number_padding = 4
 # Payment days. Applies to every client; there is no per-client override.
 payment_terms_days = 30
 
+# Whether page 2 of the invoice shows the hours of fixed-price and week-rate
+# rows. Hidden rows still appear, with "fixed price" or "week rate" in place of
+# their hours, and their hours are left out of the total. The terminal says
+# which way these are set whenever an invoice has such rows.
+show_fixed_price_hours = false
+show_week_rate_hours = true
+
 
 # One block per currency received. The invoice shows the block matching the
 # client's Currency. A client whose currency has no block stops the run.

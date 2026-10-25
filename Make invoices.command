@@ -15,11 +15,14 @@ while true; do
   fi
 
   # Wait for r, so a fix in Notion can be pasted and tried again without
-  # going back to Finder. Other keys do nothing; closing the window ends it.
-  # If there is no keyboard to read from, read fails and the loop ends.
-  print -n "\nPress r to run again, or close this window. "
+  # going back to Finder, or Enter to end the script. Ending it here means the
+  # window then closes without Terminal asking to terminate a running process.
+  # Other keys do nothing. If there is no keyboard to read from, read fails
+  # and the loop ends.
+  print -n "\nPress r to run again, or Enter to exit the script. "
   while read -s -k 1 key; do
     [[ $key == [rR] ]] && { clear; continue 2; }
+    [[ $key == $'\n' || $key == $'\r' ]] && { echo; exit 0; }
   done
   exit
 done

@@ -21,7 +21,7 @@ def batch_of(folder):
 
 
 def lines_of(invoice):
-    return [(l.unit, l.description, l.qty, l.rate, l.amount) for l in invoice.lines]
+    return [(l.unit, l.project, l.charge, l.qty, l.rate, l.amount) for l in invoice.lines]
 
 
 @pytest.fixture
@@ -46,51 +46,62 @@ def test_dates_and_terms(invoices):
     assert first.date == date(2026, 12, 11) and first.due_date == date(2027, 1, 10)
 
 
-def test_hourly_lines_one_per_date(invoices):
+def test_hours_add_up_into_one_line_per_project(invoices):
+    # 2 h on 7 Sep and 1.25 h on 8 Sep.
     assert lines_of(invoices["INV-0001"]) == [
-        ("hour", "7 Sep — Lantern concept sketches (hourly rate)", D("2"), D("120.00"), D("240.00")),
-        ("hour", "8 Sep — Kick-off call (hourly rate)", D("1.25"), D("120.00"), D("150.00")),
+        ("hour", "Stage Lantern", "Hourly", D("3.25"), D("120.00"), D("390.00")),
     ]
 
 
-def test_two_projects_on_one_date_reach_a_day_together(invoices):
+def test_a_day_across_two_projects_names_both(invoices):
+    # 9 Sep: 5 h Wave Bench + 3.5 h Tide Clock = one day plus 0.5 h, per client.
     assert lines_of(invoices["INV-0002"]) == [
-        ("day", "9 Sep — Bench frame CAD; Clock face prototype print (daily rate)",
-         D("1"), D("600.00"), D("600.00")),
-        ("hour", "9 Sep — Bench frame CAD; Clock face prototype print (hourly rate)",
-         D("0.5"), D("90.00"), D("45.00")),
-        ("hour", "10 Sep — Supplier quotes (hourly rate)", D("0.75"), D("90.00"), D("67.50")),
+        ("day", "Wave Bench, Tide Clock", "Daily", D("1"), D("600.00"), D("600.00")),
+        ("hour", "Wave Bench, Tide Clock", "Hourly", D("0.5"), D("90.00"), D("45.00")),
+        ("hour", "Wave Bench", "Hourly", D("0.75"), D("90.00"), D("67.50")),
     ]
     assert invoices["INV-0002"].total == D("712.50")
 
 
-def test_weeks_collapse_and_never_tip_a_date_into_a_day(invoices):
+def test_each_week_keeps_its_tag_and_never_tips_a_date_into_a_day(invoices):
     inv = invoices["INV-0003"]
     assert lines_of(inv) == [
-        ("week", "Lantern build week — agreed 14 Oct", D("1"), D("3000.00"), D("3000.00")),
-        # 6 Nov also has 5 week hours; only the 4 plain hours count, so no day.
-        ("hour", "6 Nov — Poster artwork files (hourly rate)", D("4"), D("120.00"), D("480.00")),
-        ("week", "Lantern install week — agreed 14 Oct", D("1"), D("3000.00"), D("3000.00")),
-        ("day", "16 Nov — Lantern rework after preview (daily rate)", D("1"), D("800.00"), D("800.00")),
-        ("hour", "16 Nov — Lantern rework after preview (hourly rate)", D("1.5"), D("120.00"), D("180.00")),
-        ("hour", "17 Nov — Lantern rework (hourly rate)", D("3.25"), D("120.00"), D("390.00")),
+        ("week", "Stage Lantern", "Week rate: Lantern build week — agreed 14 Oct",
+         D("1"), D("3000.00"), D("3000.00")),
+        ("week", "Stage Lantern", "Week rate: Lantern install week — agreed 14 Oct",
+         D("1"), D("3000.00"), D("3000.00")),
+        ("day", "Stage Lantern", "Daily", D("1"), D("800.00"), D("800.00")),
+        # 4 h on 6 Nov (which also has 5 week hours, so no day), 1.5 h past the
+        # day on 16 Nov, 3.25 h on 17 Nov.
+        ("hour", "Stage Lantern", "Hourly", D("8.75"), D("120.00"), D("1050.00")),
     ]
     assert inv.total == D("7850.00")
     assert len(inv.work_log) == 12 and inv.hours == D("94.75")
 
 
+def test_a_week_can_have_a_custom_price(folder):
+    folder.edit("timesheet.txt", "| Diffuser fitting | Stage Lantern | week rate | "
+                "Lantern build week — agreed 14 Oct |  |",
+                "| Diffuser fitting | Stage Lantern | week rate | "
+                "Lantern build week — agreed 14 Oct | 2,500 |")
+    inv = next(i for i in batch_of(folder).invoices if i.number == "INV-0003")
+    assert lines_of(inv)[0] == ("week", "Stage Lantern",
+                                "Week rate: Lantern build week — agreed 14 Oct",
+                                D("1"), D("2500"), D("2500.00"))
+    assert lines_of(inv)[1][-1] == D("3000.00")  # the other week keeps the rate card
+
+
 def test_sek_rates_are_converted_then_rounded_per_line(invoices):
     inv = invoices["INV-0004"]
-    # 800 / 0.145 = 5517.24..., 120 / 0.145 = 827.586... -> 827.59
+    # 800 / 0.145 = 5517.24..., 120 / 0.145 = 827.586... -> 827.59.
+    # Hours: 0.5 past the day on 18 Nov, 2.75 and 1.5 -> 4.75 x 827.59 = 3931.0525.
     assert lines_of(inv) == [
-        ("day", "18 Nov — Lamp shade modelling (daily rate)", D("1"), D("5517.24"), D("5517.24")),
-        ("hour", "18 Nov — Lamp shade modelling (hourly rate)", D("0.5"), D("827.59"), D("413.80")),
-        ("hour", "19 Nov — Review call (hourly rate)", D("2.75"), D("827.59"), D("2275.87")),
-        ("hour", "20 Nov — Shade test print (hourly rate)", D("1.5"), D("827.59"), D("1241.39")),
+        ("day", "Aurora Lamp", "Daily", D("1"), D("5517.24"), D("5517.24")),
+        ("hour", "Aurora Lamp", "Hourly", D("4.75"), D("827.59"), D("3931.05")),
     ]
-    assert inv.total == D("9448.30")
+    assert inv.total == D("9448.29")
     assert inv.fx_rate == D("0.1450") and inv.client.currency == "SEK"
-    assert [l.amount_aud for l in inv.lines] == [D("800.00"), D("60.00"), D("330.00"), D("180.00")]
+    assert [l.amount_aud for l in inv.lines] == [D("800.00"), D("570.00")]
 
 
 def test_halves_round_up_not_to_even():
@@ -103,20 +114,32 @@ def test_fixed_price_charges_only_rows_with_an_amount(invoices):
     nov = invoices["INV-0005"]
     assert lines_of(nov) == [
         # 5 hourly hours on 25 Nov; the 3.5 fixed-price hours don't count toward a day.
-        ("hour", "25 Nov — Safety signage for the tool wall (hourly rate)", D("5"), D("60.00"), D("300.00")),
-        ("fixed", "Tool wall first panels — deposit", D("1"), D("1500"), D("1500.00")),
+        ("hour", "Tool Wall", "Hourly", D("5"), D("60.00"), D("300.00")),
+        ("fixed", "Tool Wall", "Fixed price: Tool wall build (50% payment)",
+         D("1"), D("1500"), D("1500.00")),
     ]
     dec = invoices["INV-0007"]
     assert lines_of(dec) == [
-        ("fixed", "Tool wall finishing and delivery — balance", D("1"), D("2000"), D("2000.00")),
+        ("fixed", "Tool Wall", "Fixed price: Tool wall build (100% payment)",
+         D("1"), D("2000"), D("2000.00")),
     ]
 
 
-def test_fixed_price_hours_never_reach_the_work_log(invoices):
+def test_fixed_price_rows_are_in_the_work_log_with_hours_hidden(invoices):
     nov = invoices["INV-0005"]
-    assert len(nov.entries) == 3  # both fixed-price rows are still covered
-    assert [e.task for e in nov.work_log] == ["Safety signage for the tool wall"]
-    assert invoices["INV-0007"].work_log == ()  # the template drops the section
+    assert [e.task for e in nov.work_log] == [
+        "Tool wall layout and CAD", "Tool wall first panels", "Safety signage for the tool wall"]
+    assert nov.hours == D("5")  # the 6 + 3.5 fixed-price hours stay hidden
+    dec = invoices["INV-0007"]
+    assert len(dec.work_log) == 2 and dec.hours == 0
+
+
+def test_hours_settings_change_what_the_work_log_counts(folder):
+    folder.edit("config.txt", "show_fixed_price_hours = false", "show_fixed_price_hours = true")
+    folder.edit("config.txt", "show_week_rate_hours = true", "show_week_rate_hours = false")
+    invoices = {i.number: i for i in batch_of(folder).invoices}
+    assert invoices["INV-0005"].hours == D("14.5")  # 6 + 3.5 fixed + 5 hourly
+    assert invoices["INV-0003"].hours == D("16.75")  # only 4 + 9.5 + 3.25 hourly
 
 
 def test_batch_total_in_aud(invoices):
@@ -138,7 +161,7 @@ def test_registered_domestic_and_export(folder):
     assert dom.gst == D("785.00") and dom.total == D("8635.00")
     exp = invoices["INV-0004"]
     assert exp.gst_treatment == "export"
-    assert all(l.gst == D("0.00") for l in exp.lines) and exp.total == D("9448.30")
+    assert all(l.gst == D("0.00") for l in exp.lines) and exp.total == D("9448.29")
 
 
 def test_gst_rounds_per_line(folder):
@@ -165,7 +188,7 @@ def test_ledger_number_with_another_prefix_is_refused(folder):
 
 
 def test_month_with_nothing_to_charge_makes_no_invoice(folder):
-    folder.edit("timesheet.txt", "| fixed price | 2000 |", "| fixed price |  |")
+    folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) |  |")
     batch = batch_of(folder)
     assert [i.number for i in batch.invoices][-1] == "INV-0006"
     assert [e.date for e, _ in batch.logged_only] == [date(2026, 12, 2), date(2026, 12, 9)]
@@ -184,3 +207,79 @@ def test_nominal_week_is_unmarked(folder):
     assert batch_of(folder).week_report[0] == (
         "    Lantern build week — agreed 14 Oct        40h  2 Nov to 6 Nov"
     )
+
+
+# ---- Fixed-price rows carried to the project's next charge ------------------
+
+LOGGED = ("work,{invoice},2026-10-31,Northside Makers Trust,{day},8,{task},Tool Wall,fixed price,,"
+          "Tool wall build (50% payment)" + "," * 12 + "\n")
+
+
+def invoice_for(batch, client, month):
+    return next(i for i in batch.invoices if i.client.name == client and i.month == month)
+
+
+def test_rows_between_payments_go_on_the_next_payment_invoice(folder):
+    # The way tags name payments: the waiting rows keep the 50% payment's tag.
+    folder.append("timesheet.txt",
+                  "| September 15, 2026 | 0 | Bench design sign-off | Wave Bench | fixed price | "
+                  "Bench build (50% payment) | 900 |\n"
+                  "| October 12, 2026 | 6 | Bench frame welding | Wave Bench | fixed price | "
+                  "Bench build (50% payment) |  |\n"
+                  "| October 14, 2026 | 4 | Bench seat fitting | Wave Bench | fixed price | "
+                  "Bench build (50% payment) |  |\n"
+                  "| November 26, 2026 | 0 | Bench handover | Wave Bench | fixed price | "
+                  "Bench build (100% payment) | 900 |\n")
+    batch = batch_of(folder)
+    nov = invoice_for(batch, "Tidewater Labs", date(2026, 11, 1))
+    assert [e.task for e in nov.work_log] == [
+        "Bench frame welding", "Bench seat fitting", "Clock mechanism testing", "Bench handover"]
+    assert ("fixed", "Wave Bench", "Fixed price: Bench build (100% payment)",
+            D("1"), D("900"), D("900.00")) in lines_of(nov)
+    assert not any(i.month == date(2026, 10, 1) for i in batch.invoices)
+    sep = invoice_for(batch, "Tidewater Labs", date(2026, 9, 1))
+    assert "Bench frame welding" not in [e.task for e in sep.work_log]
+
+
+def test_a_month_with_a_charge_on_the_project_keeps_its_own_rows(folder):
+    # A materials charge is a fixed-price charge on the project too, so rows
+    # waiting in that month go on its invoice.
+    folder.append("timesheet.txt",
+                  "| October 20, 2026 | 5 | Tool wall sketches | Tool Wall | fixed price | "
+                  "Tool wall build (50% payment) |  |\n"
+                  "| October 21, 2026 | 0 | 3D printing filament | Tool Wall | fixed price | "
+                  "Material costs | 180 |\n")
+    october = invoice_for(batch_of(folder), "Northside Makers Trust", date(2026, 10, 1))
+    assert lines_of(october) == [
+        ("fixed", "Tool Wall", "Fixed price: Material costs", D("1"), D("180"), D("180.00"))]
+    assert [e.task for e in october.work_log] == ["Tool wall sketches", "3D printing filament"]
+
+
+def test_rows_waiting_in_the_ledger_are_shown_with_the_next_charge(folder):
+    folder.append("ledger.csv", LOGGED.format(invoice="", day="2026-10-15", task="Tool wall concept"))
+    nov = invoice_for(batch_of(folder), "Northside Makers Trust", date(2026, 11, 1))
+    assert [e.task for e in nov.carried] == ["Tool wall concept"]
+    assert nov.work_log[0].task == "Tool wall concept"
+    assert "Tool wall concept" not in [e.task for e in nov.entries]  # already in the ledger
+
+
+def test_rows_before_the_last_invoiced_payment_are_not_shown_again(folder):
+    folder.append("ledger.csv", LOGGED.format(invoice="", day="2026-10-15", task="Tool wall concept"))
+    folder.append("ledger.csv", LOGGED.format(invoice="INV-0001", day="2026-10-20",
+                                              task="Tool wall first cut"))
+    nov = invoice_for(batch_of(folder), "Northside Makers Trust", date(2026, 11, 1))
+    assert nov.carried == ()
+
+
+def test_rows_after_the_last_charge_wait_in_the_ledger(folder):
+    folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) |  |")
+    batch = batch_of(folder)
+    assert [e.task for e, _ in batch.logged_only] == [
+        "Tool wall revisions", "Tool wall finishing and delivery"]
+
+
+def test_carried_hours_follow_the_setting(folder):
+    folder.edit("config.txt", "show_fixed_price_hours = false", "show_fixed_price_hours = true")
+    folder.append("ledger.csv", LOGGED.format(invoice="", day="2026-10-15", task="Tool wall concept"))
+    nov = invoice_for(batch_of(folder), "Northside Makers Trust", date(2026, 11, 1))
+    assert nov.hours == D("22.5")  # 8 carried + 6 + 3.5 fixed + 5 hourly

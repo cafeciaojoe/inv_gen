@@ -5,7 +5,7 @@ target before deleting, and confirm with Joe before removing anything outside th
 repo or the scratchpad.
 
 - [ ] Scratchpad files (demo folders, rendered samples)
-- [ ] `resources/style-options/` (the style sample PDFs; ask Joe first)
+- [ ] `resources/style-options/` and `resources/samples/` (sample PDFs; ask Joe first)
 - [ ] Throwaway packages in uv's cache (as was done for PyMuPDF)
 - [ ] `.pytest_cache`, `__pycache__`
 - [ ] Any draft preview folders left in the system temp directory by test runs
