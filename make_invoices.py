@@ -294,6 +294,7 @@ class Config:
     fx: dict[str, FxRate]
     number_prefix: str
     number_padding: int
+    earlier_prefixes: tuple[str, ...]  # of numbers in the ledger from before number_prefix
     terms_days: int
     payment: dict[str, dict]  # currency -> its [payment.<CURRENCY>] block
     payment_note: str
@@ -311,6 +312,8 @@ _KINDS = {
     "a number": lambda v: isinstance(v, (int, Decimal)) and not isinstance(v, bool),
     "a date like 2026-11-30, without quotes":
         lambda v: isinstance(v, date) and not isinstance(v, datetime),
+    'a list in square brackets, like ["INV-"]':
+        lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
 }
 
 
@@ -322,8 +325,8 @@ SETTINGS = {
     "business": {"trading_name", "contact_name", "email", "phone", "address"},
     "tax": {"gst_registered", "abn", "turnover_threshold", "turnover_warn_at"},
     "currency": {"home", "source"},
-    "invoicing": {"invoice_date", "number_prefix", "number_padding", "payment_terms_days",
-                  "show_fixed_price_hours", "show_week_rate_hours"},
+    "invoicing": {"invoice_date", "number_prefix", "number_padding", "earlier_prefixes",
+                  "payment_terms_days", "show_fixed_price_hours", "show_week_rate_hours"},
     "payment": {"note"},
     "paths": {"invoices"},
 }
@@ -428,6 +431,8 @@ def load_config(base: Path, today: date, errors: list[str]) -> Config | None:
     padding = setting("invoicing", "number_padding", "a whole number")
     if padding is not None and padding < 1:
         errors.append("config.txt — number_padding under [invoicing] must be 1 or more")
+    earlier = setting("invoicing", "earlier_prefixes", 'a list in square brackets, like ["INV-"]',
+                      required=False)
     terms = setting("invoicing", "payment_terms_days", "a whole number")
     if terms is not None and terms < 0:
         errors.append("config.txt — payment_terms_days under [invoicing] can't be negative")
@@ -471,6 +476,7 @@ def load_config(base: Path, today: date, errors: list[str]) -> Config | None:
         fx=fx,
         number_prefix=prefix,
         number_padding=padding,
+        earlier_prefixes=tuple(earlier or ()),
         terms_days=terms,
         payment=blocks,
         payment_note=note,
@@ -858,9 +864,16 @@ def parse_ledger(raw: bytes, errors: list[str]) -> Ledger:
     return Ledger(tuple(work), tuple(charges), raw)
 
 
-def load_ledger(base: Path, errors: list[str]) -> Ledger:
+def load_ledger(base: Path, folder: Path, errors: list[str]) -> Ledger:
+    """The ledger in the invoices folder, so each financial year's folder keeps its own."""
+    stray = base / "ledger.csv"
+    if folder != base and stray.exists():
+        # Left where it used to live. Reading neither would restart the numbering.
+        errors.append(f"ledger.csv — there is one beside the script, but the ledger lives in "
+                      f"{folder} now. Move it there.")
+        return Ledger((), (), None)
     try:
-        raw = (base / "ledger.csv").read_bytes()
+        raw = (folder / "ledger.csv").read_bytes()
     except FileNotFoundError:
         return Ledger((), (), None)  # first run: created on the first commit
     return parse_ledger(raw, errors)
@@ -892,7 +905,7 @@ def load_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
     clients = load_clients(base, currencies, errors)
     rates = load_rates(base, errors)
     entries, header, relative_as_of = load_timesheet(base, errors)
-    ledger = load_ledger(base, errors)
+    ledger = load_ledger(base, config.invoices_dir, errors) if config else None
     if errors:
         return None
     return Inputs(config, tuple(clients), rates, tuple(entries), ledger, header, relative_as_of)
@@ -1003,14 +1016,20 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
                 + "\n  Make every row of one booked week carry exactly the same tag."
             )
 
-    # New numbers continue from the ledger's highest, so every number in it
-    # has to be readable as prefix + digits.
-    pattern = re.compile(re.escape(config.number_prefix) + r"\d+")
-    odd = sorted({r.invoice_no for r in (*ledger.work, *ledger.charges)
-                  if r.invoice_no and not pattern.fullmatch(r.invoice_no)})
+    # New numbers continue from the highest with number_prefix, so every number
+    # has to be readable as a prefix + digits: number_prefix, or one named in
+    # earlier_prefixes, whose numbers are kept as they were sent. Anything else
+    # is a typo the numbering would otherwise skip over.
+    prefix = config.number_prefix
+    odd = sorted({n for n in (r.invoice_no for r in (*ledger.work, *ledger.charges))
+                  if n and all(sequence_of(n, p) is None
+                               for p in (prefix, *config.earlier_prefixes))})
     for number in odd:
+        hint = ("" if number.startswith(prefix) else
+                ". If it is from an earlier numbering, add that prefix to earlier_prefixes "
+                "under [invoicing] in config.txt")
         errors.append(f'ledger.csv — invoice number "{number}" is not number_prefix '
-                      f'"{config.number_prefix}" followed by digits')
+                      f'"{prefix}" followed by digits{hint}')
 
     # Per billed client: a rate for its tier, a way to pay, and today's rate.
     clients = sorted({c.name: c for _, c in billed}.values(), key=lambda c: c.name)
@@ -1144,10 +1163,18 @@ class Batch:
     held_back: tuple[tuple[Entry, Client], ...] = ()
 
 
+def sequence_of(number: str, prefix: str) -> int | None:
+    """7 for INV-007 with prefix INV-; None for a number from another numbering."""
+    rest = number[len(prefix):]
+    if not number.startswith(prefix) or not (rest.isascii() and rest.isdigit()):
+        return None
+    return int(rest)
+
+
 def highest_invoice_number(ledger: Ledger, prefix: str) -> int:
-    numbers = [int(r.invoice_no[len(prefix):]) for r in (*ledger.work, *ledger.charges)
-               if r.invoice_no]
-    return max(numbers, default=0)
+    """The highest number with this prefix; an earlier numbering's are skipped."""
+    numbers = [sequence_of(r.invoice_no, prefix) for r in (*ledger.work, *ledger.charges)]
+    return max((n for n in numbers if n is not None), default=0)
 
 
 def charge_lines(entries: list[Entry], client: Client, card: RateCard,
@@ -1587,6 +1614,12 @@ def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
     else:
         listed = "The rate cards and summary.csv"
     out += ["", f"{listed} are open in Finder: {preview}"]
+    # Said before commit, so a [paths] line left commented out is noticed in time.
+    out += ["", f"On commit, invoices, summary.csv and ledger.csv go to {config.invoices_dir}"]
+    if inputs.ledger.raw is None and batch.invoices:
+        # A new financial year's folder starts a new ledger, and numbering with it.
+        out.append(f"  No ledger.csv there yet: numbering starts at {batch.invoices[0].number}, "
+                   "and commit makes one.")
     return out
 
 
@@ -1795,8 +1828,8 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes,
     preview; the ledger check below is what keeps it correct.
     """
     config = inputs.config
-    ledger_path = base / "ledger.csv"
     folder_of_invoices = config.invoices_dir
+    ledger_path = folder_of_invoices / "ledger.csv"
     summary_path = folder_of_invoices / "summary.csv"
 
     def shown(path: Path) -> str:
@@ -1868,7 +1901,7 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes,
     if written:
         print(f"\nCommitted {len(written)} invoice{'s' if len(written) != 1 else ''}:")
         print("\n".join(f"  {shown(path)}" for path in written))
-        print(f"ledger.csv: {len(rows)} rows added.")
+        print(f"{shown(ledger_path)}: {len(rows)} rows added.")
     else:
         print("\nNo invoices this run.")
 

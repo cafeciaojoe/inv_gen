@@ -45,9 +45,9 @@ Your invoicing folder also needs:
 | `rates.txt` | Your rate card, pasted from Notion |
 | `timesheet.txt` | The month's unbilled rows, pasted from Notion |
 
-`ledger.csv` is created by the first commit. If you have invoices from before the
-script, enter them as opening rows first (see [Opening rows](#opening-rows)) so
-the numbering carries on from them.
+`ledger.csv` is created by the first commit, in the invoices folder (see below).
+If you have invoices from before the script, enter them as opening rows first
+(see [Opening rows](#opening-rows)) so the numbering carries on from them.
 
 ## Every month
 
@@ -158,21 +158,27 @@ its work is dated after that date.
 | `make_invoices.py`, `Make invoices.command`, `template/` | this repo | No. Drag in new copies to update. |
 | `config.txt` | you | Yes, in TextEdit. It's the one input not kept in Notion. |
 | `clients.txt`, `rates.txt`, `timesheet.txt` | pasted from Notion | No. Fix things in Notion and paste again. |
-| `ledger.csv` | the script | Only to add opening rows. Never change or delete a row. |
 | `timesheet_not_sent.txt` | the script, when rows weren't sent | No. Paste it back into Notion. |
 | `rate cards/` | the script, on every commit | No. Send the one for the client's tier. |
-| `invoices/` | the script | No. Holds a folder per month and `summary.csv`. |
+| `invoices/` | the script | No. Holds a folder per month, `summary.csv` and `ledger.csv`. |
+| `invoices/ledger.csv` | the script | Only to add opening rows. Never change or delete a row. |
 
 `ledger.csv` is the only file that matters for your records: everything else can
 be rebuilt from it. Keep it backed up. The ATO wants five years.
 
-The invoices go in `invoices/` beside the script, one folder per month. To keep
-them somewhere else, add this to `config.txt`, as its own section:
+The invoices go in `invoices/` beside the script, one folder per month, with
+`summary.csv` and `ledger.csv` beside them. To keep them somewhere else, such as
+a folder for the financial year, add this to `config.txt`, as its own section:
 
 ```toml
 [paths]
 invoices = "~/Documents/Invoices"
 ```
+
+Uncomment both lines: a setting belongs to the `[section]` line above it. The
+preview ends by saying where commit will save. A `ledger.csv` left beside the
+script is refused, so move it into the invoices folder. A folder with no
+`ledger.csv` starts the numbering again from 001, and the preview says so.
 
 `summary.csv`, at the top of that folder, is your overview. Each invoice is a row,
 grouped by month, with its hours and its amount split into hourly, daily, week
@@ -231,7 +237,7 @@ Australian clients, and "GST-free export" for clients abroad. Drafts always say
 
 ## Opening rows
 
-Invoices made before the script go into `ledger.csv` as one `charge` row per
+Invoices made before the script go into `ledger.csv`, in the invoices folder, as one `charge` row per
 invoice line, added under the header row. Use your usual numbering
 (`INV-0003`) so new invoices carry on after the highest. For example:
 
@@ -242,6 +248,23 @@ charge,INV-0003,2026-08-31,Bluegum Theatre Company,,,,,,PO BT-0001,Concept work 
 The columns, in order, are in the header row. Leave the ones that don't apply
 empty, but keep the commas. If a row is malformed, the script refuses and names
 the line.
+
+To change the numbering, say to one per financial year, set `number_prefix` and
+`number_padding` in `config.txt`. New numbers carry on from the highest with the
+new prefix, starting at 1. If the new numbering has already begun, put that
+invoice in as an opening row with its new-style number, so the script carries
+on after it.
+
+Numbers already in the ledger have to match `number_prefix`, so that a typo
+can't slip past the numbering. If invoices with the old numbering went out
+earlier in the same ledger, name the old prefix as well:
+
+```toml
+earlier_prefixes = ["INV-"]
+```
+
+Those numbers stay as they were sent. A new financial year's folder starts with
+an empty ledger, so it doesn't need the line.
 
 ## Troubleshooting
 

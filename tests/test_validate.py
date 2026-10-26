@@ -54,7 +54,7 @@ def test_double_paste_within_one_batch(folder):
 
 
 def test_line_already_in_the_ledger(folder):
-    folder.append("ledger.csv",
+    folder.append("invoices/ledger.csv",
                   "work,INV-0001,2026-09-30,Bluegum Theatre Company,2026-09-07,2,"
                   "Lantern concept sketches,Stage Lantern,,PO BT-0001" + LEDGER_TAIL + "\n")
     error = only_error(folder)
@@ -63,7 +63,7 @@ def test_line_already_in_the_ledger(folder):
 
 
 def test_line_logged_without_an_invoice(folder):
-    folder.append("ledger.csv",
+    folder.append("invoices/ledger.csv",
                   "work,,2027-01-11,Northside Makers Trust,2026-12-02,7,Tool wall revisions,"
                   "Tool Wall,fixed price," + LEDGER_TAIL + "\n")
     assert only_error(folder).startswith(
@@ -105,7 +105,7 @@ def test_a_week_crossing_a_month_end_is_accepted(folder):
 
 
 def test_week_tag_already_billed_even_with_other_capitals(folder):
-    folder.append("ledger.csv",
+    folder.append("invoices/ledger.csv",
                   "charge,INV-0002,2026-10-31,Bluegum Theatre Company,,,,,,PO BT-0001,"
                   "lantern build week — agreed 14 oct,week,1,3000.00,3000.00,AUD,1,2026-10-31,"
                   "TEST,3000.00,base,domestic,0.00,\n")
@@ -116,7 +116,7 @@ def test_week_tag_already_billed_even_with_other_capitals(folder):
 
 
 def test_week_tag_already_billed_found_on_ledger_work_rows(folder):
-    folder.append("ledger.csv",
+    folder.append("invoices/ledger.csv",
                   "work,INV-0002,2026-10-31,Bluegum Theatre Company,2026-10-20,8,Earlier build,"
                   "Stage Lantern,week rate,PO BT-0001,Lantern install week — agreed 14 Oct"
                   + "," * 13 + "\n")

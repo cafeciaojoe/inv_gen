@@ -62,6 +62,11 @@ as_at = 2027-01-11
 number_prefix = "INV-"
 number_padding = 4
 
+# Prefixes of numbers already in the ledger from an earlier numbering, say
+# after changing number_prefix mid-year. They are kept as they were sent, and
+# new numbers carry on only from number_prefix. Any other number stops the run.
+# earlier_prefixes = ["2025-"]
+
 # Payment days. Applies to every client; there is no per-client override.
 payment_terms_days = 30
 
@@ -73,9 +78,10 @@ show_fixed_price_hours = false
 show_week_rate_hours = true
 
 
-# Where the month folders of invoices and summary.csv go. Without it they go
-# in an "invoices" folder beside the script. ~ works; the folder's parent must
-# exist. Keep the [paths] line: a setting belongs to the [section] above it.
+# Where the month folders of invoices, summary.csv and ledger.csv go, say a
+# folder per financial year. Without it they go in an "invoices" folder beside
+# the script. ~ works; the folder's parent must exist. Uncomment both lines:
+# a setting belongs to the [section] line above it.
 # [paths]
 # invoices = "~/Documents/Invoices"
 

@@ -73,7 +73,7 @@ def test_held_back_rows_go_into_the_not_sent_file(folder):
     assert run(folder.path, TODAY, ask=lambda _: "commit", open_folder=lambda _: None) == 0
     text = (folder.path / "timesheet_not_sent.txt").read_text()
     assert text.splitlines()[2] == JAN_ROW.strip()
-    assert "Clock hands" not in (folder.path / "ledger.csv").read_text()
+    assert "Clock hands" not in (folder.path / "invoices" / "ledger.csv").read_text()
 
 
 # ---- Notion's relative dates -------------------------------------------------

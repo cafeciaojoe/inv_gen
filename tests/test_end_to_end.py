@@ -30,6 +30,8 @@ def setup(tmp_path):
     shutil.copytree(REPO / "template", folder / "template")
     for f in FIXTURES.iterdir():
         shutil.copy(f, folder / f.name)
+    (folder / "invoices").mkdir()
+    (folder / "ledger.csv").rename(folder / "invoices" / "ledger.csv")
     config = folder / "config.txt"
     config.write_text(config.read_text().replace("# invoice_date = 2026-11-30",
                                                  "invoice_date = 2027-01-11"))
@@ -78,7 +80,7 @@ def test_commit_then_the_same_timesheet_again(setup):
     assert "Committed 7 invoices:" in result.stdout
     assert sorted(p.name for p in (setup.path / "invoices").rglob("*.pdf")) == [
         f"INV-000{n}.pdf" for n in range(1, 8)]
-    assert len((setup.path / "ledger.csv").read_text().splitlines()) == 1 + 40
+    assert len((setup.path / "invoices" / "ledger.csv").read_text().splitlines()) == 1 + 40
     assert (setup.path / "invoices" / "summary.csv").read_text().startswith("month,client,")
     assert not os.path.exists(setup.opened()[0])
 
@@ -96,7 +98,7 @@ def test_refused_run_opens_nothing(setup):
     assert 'clients.txt — unknown Tier value "gold"' in result.stderr
     assert result.stderr.rstrip().endswith("Fix it in Notion and paste the table again. "
                                            "Nothing was written.")
-    assert setup.opened() == [] and not (setup.path / "invoices").exists()
+    assert setup.opened() == [] and not list((setup.path / "invoices").rglob("*.pdf"))
 
 
 @pytest.mark.skipif(shutil.which("uv") is None and not os.path.exists("/opt/homebrew/bin/uv"),
@@ -170,4 +172,4 @@ def test_launcher_runs_again_on_r_and_exits_on_enter(setup):
             os.kill(pid, signal.SIGHUP)  # what closing the window sends
             os.waitpid(pid, 0)
     assert status == 0  # ended by itself, so closing the window asks nothing
-    assert not (setup.path / "invoices").exists()
+    assert not list((setup.path / "invoices").rglob("*.pdf"))

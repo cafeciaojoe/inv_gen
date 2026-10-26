@@ -30,7 +30,7 @@ def commit_run(folder, answer="commit", today=TODAY, during_prompt=None, preview
 
 
 def ledger(folder):
-    with open(folder.path / "ledger.csv", newline="") as f:
+    with open(folder.path / "invoices" / "ledger.csv", newline="") as f:
         return list(csv.DictReader(f))
 
 
@@ -137,7 +137,7 @@ def test_summary_csv(folder):
 def test_financial_year_leaves_out_last_years_months(folder):
     # An opening invoice for June 2026 is last financial year, but still within
     # the rolling 12 months that count toward GST.
-    folder.append("ledger.csv",
+    folder.append("invoices/ledger.csv",
                   "charge,INV-000,2026-06-30,Bluegum Theatre Company,,,,,,,Opening invoice,"
                   "fixed,1,1000.00,1000.00,AUD,1,2026-06-30,,1000.00,base,unregistered,,2026-06\n")
     commit_run(folder)
@@ -146,21 +146,43 @@ def test_financial_year_leaves_out_last_years_months(folder):
     assert lines[-2].endswith(",14302.50") and lines[-1].endswith(",15302.50")
 
 
-def test_invoices_and_summary_go_to_the_configured_folder(folder, tmp_path):
-    target = tmp_path / "elsewhere" / "Invoices"
-    (tmp_path / "elsewhere").mkdir()
+def test_invoices_summary_and_ledger_go_to_the_configured_folder(folder, tmp_path, capsys):
+    target = tmp_path / "FY26-27" / "Invoices"
+    target.mkdir(parents=True)
+    (folder.path / "invoices" / "ledger.csv").rename(target / "ledger.csv")
+    (folder.path / "invoices").rmdir()
     folder.edit("config.txt", "[invoicing]\n", f'[paths]\ninvoices = "{target}"\n\n[invoicing]\n')
     assert commit_run(folder) == EXIT_COMMITTED
+    out = capsys.readouterr().out
+    # The preview says where they will go, before commit is typed.
+    assert (f"\n\nOn commit, invoices, summary.csv and ledger.csv go to {target.resolve()}\n"
+            in out)
+    assert "No ledger.csv there yet" not in out
     assert (target / "2026-11" / "INV-0003.pdf").exists()
     assert (target / "summary.csv").read_text().startswith("month,client,")
+    assert len((target / "ledger.csv").read_text().splitlines()) > 40
     assert not (folder.path / "invoices").exists()
+
+
+def test_a_ledger_left_beside_the_script_is_refused(folder):
+    (folder.path / "invoices" / "ledger.csv").rename(folder.path / "ledger.csv")
+    _, errors = folder.load()
+    assert errors == [f"ledger.csv — there is one beside the script, but the ledger lives in "
+                      f"{folder.path / 'invoices'} now. Move it there."]
+
+
+def test_a_folder_with_no_ledger_yet_says_numbering_starts_again(folder, capsys):
+    (folder.path / "invoices" / "ledger.csv").unlink()
+    commit_run(folder)
+    assert "  No ledger.csv there yet: numbering starts at INV-0001, and commit makes one.\n" \
+        in capsys.readouterr().out
 
 
 def test_commit_prints_what_it_kept(folder, capsys):
     commit_run(folder)
     out = capsys.readouterr().out
     assert "Committed 7 invoices:\n  invoices/2026-09/INV-0001.pdf\n" in out
-    assert out.endswith("ledger.csv: 40 rows added.\n"
+    assert out.endswith("invoices/ledger.csv: 40 rows added.\n"
                         "invoices/summary.csv: replaced with the one in the preview.\n"
                         "rate cards/: 3 rate cards, dated today.\n")
 
@@ -187,32 +209,32 @@ def test_discarding_leaves_the_old_summary(folder):
 
 
 def test_first_run_creates_the_ledger(folder):
-    (folder.path / "ledger.csv").unlink()
+    (folder.path / "invoices" / "ledger.csv").unlink()
     commit_run(folder)
-    header = (folder.path / "ledger.csv").read_text().splitlines()[0]
+    header = (folder.path / "invoices" / "ledger.csv").read_text().splitlines()[0]
     assert header == ",".join(make_invoices.LEDGER_COLUMNS)
 
 
 def test_existing_rows_are_kept_byte_for_byte(folder):
     opening = ("work,INV-0003,2026-08-31,Bluegum Theatre Company,2026-08-20,2,Opening sketch,"
                "Stage Lantern,,PO BT-0001" + "," * 14)  # hand-entered, no final newline
-    folder.append("ledger.csv", opening)
-    before = (folder.path / "ledger.csv").read_bytes()
+    folder.append("invoices/ledger.csv", opening)
+    before = (folder.path / "invoices" / "ledger.csv").read_bytes()
     commit_run(folder)
-    after = (folder.path / "ledger.csv").read_bytes()
+    after = (folder.path / "invoices" / "ledger.csv").read_bytes()
     assert after.startswith(before + b"\n")
     assert pdfs_on_disk(folder)["invoices/2026-09"] == ["INV-0004.pdf", "INV-0005.pdf"]
 
 
 def test_running_the_same_timesheet_again_is_refused(folder, capsys):
     commit_run(folder)
-    before = (folder.path / "ledger.csv").read_bytes()
+    before = (folder.path / "invoices" / "ledger.csv").read_bytes()
     capsys.readouterr()
     assert commit_run(folder) == EXIT_REFUSED
     err = capsys.readouterr().err
     assert "this line may already be billed, on INV-0001" in err
     assert "was already billed, on INV-0003" in err  # the week tags too
-    assert (folder.path / "ledger.csv").read_bytes() == before
+    assert (folder.path / "invoices" / "ledger.csv").read_bytes() == before
 
 
 def test_next_month_continues_the_numbering(folder):
@@ -233,17 +255,17 @@ def test_existing_pdf_refuses_the_whole_commit(folder, capsys):
     clash = folder.path / "invoices/2026-11/INV-0003.pdf"
     clash.parent.mkdir(parents=True)
     clash.write_bytes(b"sent last week")
-    before = (folder.path / "ledger.csv").read_bytes()
+    before = (folder.path / "invoices" / "ledger.csv").read_bytes()
     assert commit_run(folder) == EXIT_REFUSED
     assert pdfs_on_disk(folder) == {"invoices/2026-11": ["INV-0003.pdf"]}
     assert clash.read_bytes() == b"sent last week"
-    assert (folder.path / "ledger.csv").read_bytes() == before
+    assert (folder.path / "invoices" / "ledger.csv").read_bytes() == before
     assert not (folder.path / "summary.csv").exists()
     assert "invoices/2026-11/INV-0003.pdf — already exists" in capsys.readouterr().err
 
 
 def test_ledger_edited_while_drafts_were_open(folder, capsys):
-    assert commit_run(folder, during_prompt=lambda: folder.append("ledger.csv", "\n")) == EXIT_REFUSED
+    assert commit_run(folder, during_prompt=lambda: folder.append("invoices/ledger.csv", "\n")) == EXIT_REFUSED
     assert pdfs_on_disk(folder) == {}
     assert "ledger.csv — changed while the drafts were open" in capsys.readouterr().err
 
@@ -256,12 +278,12 @@ def test_failure_before_the_ledger_is_replaced_removes_the_pdfs(folder, monkeypa
     def fail(path, data):
         raise failure
     monkeypatch.setattr(make_invoices, "replace_atomically", fail)
-    before = (folder.path / "ledger.csv").read_bytes()
+    before = (folder.path / "invoices" / "ledger.csv").read_bytes()
     with pytest.raises(type(failure)):
         commit_run(folder)
-    assert not (folder.path / "invoices").exists()
-    assert (folder.path / "ledger.csv").read_bytes() == before
-    assert not (folder.path / "summary.csv").exists()
+    # No PDFs, month folders, summary or staged files: only the ledger, as it was.
+    assert [p.name for p in (folder.path / "invoices").iterdir()] == ["ledger.csv"]
+    assert (folder.path / "invoices" / "ledger.csv").read_bytes() == before
     assert not [p.name for p in folder.path.iterdir() if p.name.endswith(".tmp")]
 
 

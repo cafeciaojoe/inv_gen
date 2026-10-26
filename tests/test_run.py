@@ -132,7 +132,9 @@ def test_summary_for_the_fixtures(folder, capsys):
     assert "Turnover, last 12 months: A$14,302.50 of A$75,000, including this run\n" in out
     assert "  ! " not in out.split("Turnover")[1]  # no threshold warning
     assert (f"The draft invoices, summary.csv and the rate cards are open in Finder: "
-            f"{prompt.preview}\n") in out
+            f"{prompt.preview}\n\n"
+            f"On commit, invoices, summary.csv and ledger.csv go to {folder.path / 'invoices'}\n"
+            ) in out
     assert out.endswith("Discarded. Nothing was written.\n")
 
 
@@ -169,7 +171,7 @@ def test_sections_with_nothing_in_them_are_left_out(folder, capsys):
 
 
 def turnover_line(folder, capsys, aud, day="2026-06-01"):
-    folder.append("ledger.csv", LEDGER_CHARGE.format(day=day, aud=aud))
+    folder.append("invoices/ledger.csv", LEDGER_CHARGE.format(day=day, aud=aud))
     run_with(folder, Prompt())
     return capsys.readouterr().out.split("Turnover, ")[1].split("\n\nThe draft")[0]
 

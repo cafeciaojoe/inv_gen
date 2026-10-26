@@ -172,19 +172,56 @@ def test_gst_rounds_per_line(folder):
 
 
 def test_numbering_continues_from_the_ledger(folder):
-    folder.append("ledger.csv",
+    folder.append("invoices/ledger.csv",
                   "charge,INV-0041,2026-08-31,Bluegum Theatre Company,,,,,,,Opening balance,"
                   "fixed,1,500.00,500.00,AUD,1,2026-08-31,opening,500.00,base,unregistered,,\n")
     assert batch_of(folder).invoices[0].number == "INV-0042"
 
 
-def test_ledger_number_with_another_prefix_is_refused(folder):
-    folder.append("ledger.csv",
-                  "charge,2026-041,2026-08-31,Bluegum Theatre Company,,,,,,,Opening balance,"
-                  "fixed,1,500.00,500.00,AUD,1,2026-08-31,opening,500.00,base,unregistered,,\n")
+OPENING = ("charge,{number},2026-08-31,Bluegum Theatre Company,,,,,,,Opening balance,"
+           "fixed,1,500.00,500.00,AUD,1,2026-08-31,opening,500.00,base,unregistered,,\n")
+
+
+def test_numbers_from_an_earlier_numbering_are_kept_and_skipped(folder):
+    folder.edit("config.txt", "number_padding = 4\n",
+                'number_padding = 4\nearlier_prefixes = ["2026-"]\n')
+    folder.append("invoices/ledger.csv", OPENING.format(number="2026-041"))
+    assert batch_of(folder).invoices[0].number == "INV-0001"
+
+
+def test_a_number_from_an_unnamed_numbering_is_refused(folder):
+    folder.append("invoices/ledger.csv", OPENING.format(number="2026-041"))
     _, errors = folder.check()
     assert errors == ['ledger.csv — invoice number "2026-041" is not number_prefix "INV-" '
-                      "followed by digits"]
+                      "followed by digits. If it is from an earlier numbering, add that prefix "
+                      "to earlier_prefixes under [invoicing] in config.txt"]
+
+
+def test_a_new_prefix_carries_on_from_its_own_highest(folder):
+    # Switching mid-year: INV-0041 stays as sent, and the new numbering
+    # continues after the one opening row already written in it.
+    folder.edit("config.txt", 'number_prefix = "INV-"', 'number_prefix = "INV-2526"')
+    folder.edit("config.txt", "number_padding = 4\n",
+                'number_padding = 2\nearlier_prefixes = ["INV-"]\n')
+    folder.append("invoices/ledger.csv", OPENING.format(number="INV-0041"))
+    folder.append("invoices/ledger.csv", OPENING.format(number="INV-252601"))
+    assert [i.number for i in batch_of(folder).invoices][:2] == ["INV-252602", "INV-252603"]
+
+
+@pytest.mark.parametrize("number", ["INV-00O4", "INV0041", "Inv-0041"])
+def test_a_typo_in_a_number_is_refused(folder, number):
+    folder.append("invoices/ledger.csv", OPENING.format(number=number))
+    _, errors = folder.check()
+    assert len(errors) == 1 and errors[0].startswith(f'ledger.csv — invoice number "{number}" '
+                                                     'is not number_prefix "INV-"')
+
+
+def test_earlier_prefixes_must_be_a_list(folder):
+    folder.edit("config.txt", "number_padding = 4\n",
+                'number_padding = 4\nearlier_prefixes = "INV-"\n')
+    _, errors = folder.load()
+    assert errors == ['config.txt — earlier_prefixes under [invoicing] must be a list in square '
+                      'brackets, like ["INV-"]']
 
 
 def test_week_report(folder):

@@ -301,7 +301,7 @@ CHARGE_ROW = ("charge,INV-0003,2026-08-31,Bluegum Theatre Company,,,,,,PO BT-000
 
 
 def test_ledger_rows_are_read(folder):
-    folder.append("ledger.csv", WORK_ROW + "\n" + CHARGE_ROW + "\n")
+    folder.append("invoices/ledger.csv", WORK_ROW + "\n" + CHARGE_ROW + "\n")
     ledger = folder.load()[0].ledger
     assert ledger.work[0].date == date(2026, 8, 20) and ledger.work[0].hours == 2
     assert ledger.charges[0].amount_aud == Decimal("240.00")
@@ -309,16 +309,16 @@ def test_ledger_rows_are_read(folder):
 
 
 def test_missing_ledger_is_a_first_run(folder):
-    (folder.path / "ledger.csv").unlink()
+    (folder.path / "invoices" / "ledger.csv").unlink()
     inputs, errors = folder.load()
     assert errors == [] and inputs.ledger.work == ()
 
 
 def test_ledger_with_wrong_header(folder):
-    (folder.path / "ledger.csv").write_text("row_type,invoice_no\n")
+    (folder.path / "invoices" / "ledger.csv").write_text("row_type,invoice_no\n")
     assert only_error(folder).startswith("ledger.csv — the header row doesn't match")
 
 
 def test_ledger_bad_row_names_its_line(folder):
-    folder.append("ledger.csv", WORK_ROW.replace("2026-08-20", "20/08/2026") + "\n")
+    folder.append("invoices/ledger.csv", WORK_ROW.replace("2026-08-20", "20/08/2026") + "\n")
     assert only_error(folder).startswith("ledger.csv — line 2:")

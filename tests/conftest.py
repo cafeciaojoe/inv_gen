@@ -24,6 +24,9 @@ def folder(tmp_path):
     """A copy of the fixtures that a test can break, with ways to load it."""
     for f in FIXTURES.iterdir():
         shutil.copy(f, tmp_path / f.name)
+    # The ledger lives in the invoices folder, which is invoices/ by default.
+    (tmp_path / "invoices").mkdir()
+    (tmp_path / "ledger.csv").rename(tmp_path / "invoices" / "ledger.csv")
     shutil.copytree(REPO / "template", tmp_path / "template")
 
     class Folder:
