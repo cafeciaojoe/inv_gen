@@ -560,6 +560,11 @@ UNITS = ("hour", "day", "week")
 class RateCard:
     block_hours: dict[str, Decimal]  # unit -> hours in one block: 1, 8, 40
     rates: dict[str, dict[str, Decimal]]  # tier -> unit -> AUD
+    # What the rate card PDFs print, as written in rates.txt: the headers, each
+    # tier's name and discount, and the explanatory rows as (heading, text).
+    headers: dict[str, str]  # "tier", "discount", and each unit -> header text
+    shown: dict[str, tuple[str, str]]  # tier -> (name as written, discount)
+    notes: tuple[tuple[str, str], ...]
 
 
 def load_rates(base: Path, errors: list[str]) -> RateCard | None:
@@ -582,11 +587,26 @@ def load_rates(base: Path, errors: list[str]) -> RateCard | None:
         else:
             block_hours[unit] = Decimal(number.group())
 
+    # The Discount column is display only, so it is optional.
+    discount = next((i for i, h in enumerate(table.header)
+                     if h.casefold().startswith("discount")), None)
+    headers = {"tier": table.header[col["Tier"]],
+               "discount": "" if discount is None else table.header[discount],
+               **{u: table.header[col[u.title()]] for u in UNITS}}
+
     rates: dict[str, dict[str, Decimal]] = {}
+    shown: dict[str, tuple[str, str]] = {}
+    notes = []
     for row in table.rows:
         figures = {u: parse_money(row.cells[col[u.title()]]) for u in UNITS}
         if all(f is None for f in figures.values()):
-            continue  # an explanatory row, like "How it's charged"
+            # An explanatory row, like "How it's charged": its first cell is
+            # the heading, the rest is text for clients, in whichever columns.
+            heading = row.cells[col["Tier"]].replace("**", "").strip()
+            text = " ".join(c for i, c in enumerate(row.cells) if i != col["Tier"] and c)
+            if heading or text:
+                notes.append((heading, text))
+            continue
         if any(f is None for f in figures.values()):
             errors.append(row_error("rates.txt", "a rate in this row is not a dollar figure",
                                     row.line, "figures like $120.00 or $3,000.00 in every rate column"))
@@ -602,10 +622,11 @@ def load_rates(base: Path, errors: list[str]) -> RateCard | None:
             errors.append(row_error("rates.txt", "a rate must be more than zero", row.line))
         else:
             rates[tier] = figures
+            shown[tier] = (typed, "" if discount is None else row.cells[discount])
 
     if len(block_hours) < len(UNITS):
         return None
-    return RateCard(block_hours, rates)
+    return RateCard(block_hours, rates, headers, shown, tuple(notes))
 
 
 # ---- timesheet.txt ----------------------------------------------------------
@@ -621,17 +642,48 @@ class Entry:
     tag: str  # names the booked week or the fixed-price agreement; empty when hourly
     amount: Decimal | None  # a fixed-price charge, or a week's custom price
     line: str
+    date_text: str = ""  # as pasted, when it was a relative date like "Last Thursday"
 
 
-def load_timesheet(base: Path, errors: list[str]) -> tuple[list[Entry], str]:
-    """The rows, and the header row as pasted (to write unsent rows back out)."""
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def notion_relative_date(text: str, pasted: date) -> date | str:
+    """A date Notion still shows relatively, as of the day it was pasted.
+
+    For about a week Notion shows a date as "Yesterday" or "Last Thursday"
+    instead of the date itself, and pastes it that way. Past forms become a
+    date; a future form ("Tomorrow", "Next Friday", "Friday") or anything else
+    comes back as the reason it can't be used.
+    """
+    words = text.lstrip("@").strip().casefold().split()
+    if words == ["today"]:
+        return pasted
+    if words == ["yesterday"]:
+        return pasted - timedelta(days=1)
+    if len(words) == 2 and words[0] == "last" and words[1] in WEEKDAYS:
+        back = (pasted.weekday() - WEEKDAYS.index(words[1])) % 7 or 7  # 1 to 7 days
+        return pasted - timedelta(days=back)
+    if (words == ["tomorrow"] or (len(words) == 1 and words[0] in WEEKDAYS)
+            or (len(words) == 2 and words[0] in ("next", "this") and words[1] in WEEKDAYS)):
+        return "is a future date in Notion's words; work can't be dated in the future"
+    return "is not a date"
+
+
+def load_timesheet(base: Path, errors: list[str]) -> tuple[list[Entry], str, date | None]:
+    """The rows, the header row as pasted (to write unsent rows back out), and
+    the day relative dates were read as of, if any were used."""
     table = read_table(base, "timesheet.txt", errors)
     if table is None:
-        return [], ""
+        return [], "", None
     col = columns(table, ["Date", "Hours", "Task", "Project", "Billing type", "Week rate tag",
                           "Amount"], errors)
     if col is None:
-        return [], table.line
+        return [], table.line, None
+    # Relative dates are as of the day the table was copied out of Notion,
+    # which is the day timesheet.txt was saved, not necessarily today.
+    pasted = date.fromtimestamp((base / "timesheet.txt").stat().st_mtime)
+    relative_used = False
 
     def bad(problem: str, row: Row, allowed: str | None = None):
         errors.append(row_error("timesheet.txt", problem, row.line, allowed))
@@ -641,11 +693,18 @@ def load_timesheet(base: Path, errors: list[str]) -> tuple[list[Entry], str]:
         cell = lambda name: row.cells[col[name]]
         problems_before = len(errors)
 
+        typed_date, date_text = cell("Date").lstrip("@").strip(), ""
         try:
-            day = datetime.strptime(cell("Date"), "%B %d, %Y").date()
+            day = datetime.strptime(typed_date, "%B %d, %Y").date()
         except ValueError:
-            day = None
-            bad(f'Date "{cell("Date")}" is not a date', row, "dates like November 2, 2026")
+            day = notion_relative_date(typed_date, pasted)
+            if isinstance(day, str):
+                bad(f'Date "{cell("Date")}" {day}', row,
+                    "dates like November 2, 2026, or Notion's Today, Yesterday or "
+                    "Last Thursday from the last week")
+                day = None
+            else:
+                date_text, relative_used = cell("Date"), True
 
         hours = None
         if not _PLAIN_NUMBER.fullmatch(cell("Hours")):
@@ -694,8 +753,8 @@ def load_timesheet(base: Path, errors: list[str]) -> tuple[list[Entry], str]:
 
         if len(errors) == problems_before:
             entries.append(Entry(day, hours, cell("Task"), cell("Project"), billing, tag,
-                                 amount, row.line))
-    return entries, table.line
+                                 amount, row.line, date_text))
+    return entries, table.line, pasted if relative_used else None
 
 
 # ---- ledger.csv -------------------------------------------------------------
@@ -796,6 +855,7 @@ class Inputs:
     entries: tuple[Entry, ...]
     ledger: Ledger
     timesheet_header: str  # as pasted, for timesheet_not_sent.txt
+    relative_as_of: date | None = None  # set when Notion's relative dates were read
 
 
 def load_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
@@ -809,11 +869,11 @@ def load_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
     currencies = {config.home_currency, *config.fx} if config else None
     clients = load_clients(base, currencies, errors)
     rates = load_rates(base, errors)
-    entries, header = load_timesheet(base, errors)
+    entries, header, relative_as_of = load_timesheet(base, errors)
     ledger = load_ledger(base, errors)
     if errors:
         return None
-    return Inputs(config, tuple(clients), rates, tuple(entries), ledger, header)
+    return Inputs(config, tuple(clients), rates, tuple(entries), ledger, header, relative_as_of)
 
 
 # ---- Cross-file checks ------------------------------------------------------
@@ -1057,6 +1117,9 @@ class Batch:
     # recorded; commit writes them to timesheet_not_sent.txt for Notion.
     not_sent: tuple[tuple[Entry, Client], ...]
     week_report: tuple[str, ...]
+    # Rows from the invoice date's own month, which isn't over yet. Held back
+    # the same way as not_sent, and listed separately.
+    held_back: tuple[tuple[Entry, Client], ...] = ()
 
 
 def highest_invoice_number(ledger: Ledger, prefix: str) -> int:
@@ -1220,9 +1283,16 @@ def compute(inputs: Inputs) -> Batch:
         if e.billing == "week rate":
             week_ends[e.tag] = max(week_ends.get(e.tag, e.date), e.date)
 
+    # The month the invoice is dated in isn't over, so its work waits: a month
+    # is invoiced once it has ended. A week ending this month waits with it.
+    this_month = config.invoice_date.replace(day=1)
     groups: dict[tuple[date, str], list[Entry]] = {}
+    held_back = []
     for e in inputs.entries:
         day = week_ends[e.tag] if e.billing == "week rate" else e.date
+        if day.replace(day=1) >= this_month:
+            held_back.append((e, owner[e.project]))
+            continue
         groups.setdefault((day.replace(day=1), owner[e.project].name), []).append(e)
 
     # Numbered in date order: by month, then client name within a month.
@@ -1259,12 +1329,15 @@ def compute(inputs: Inputs) -> Batch:
             invoices[i] = replace(invoices[i], entries=invoices[i].entries + rows)
         else:
             not_sent.extend((e, clients[name]) for e in rows)
-    return Batch(tuple(invoices), tuple(not_sent), tuple(week_report(inputs.entries, card)))
+    held = {e for e, _ in held_back}
+    billed = tuple(e for e in inputs.entries if e not in held)
+    return Batch(tuple(invoices), tuple(not_sent), tuple(week_report(billed, card)),
+                 tuple(held_back))
 
 
 # ---- PDFs -------------------------------------------------------------------
 
-TEMPLATE_FILES = ("template/invoice.html", "template/invoice.css")
+TEMPLATE_FILES = ("template/invoice.html", "template/invoice.css", "template/rate_card.html")
 
 
 def long_date(d: date) -> str:
@@ -1352,6 +1425,49 @@ def render_pdf(base: Path, env: jinja2.Environment, inv: Invoice, config: Config
     return weasyprint.HTML(string=html, base_url=str(base / "template")).write_pdf()
 
 
+RATE_CARDS = "rate cards"  # the folder commit saves them in
+
+
+# Rate card files are numbered rather than named for their tier, so the file
+# a client receives doesn't announce which tier they're on.
+CARD_NUMERALS = {"base": "I", "discounted": "II", "subsidised": "III"}
+
+
+def rate_cards(base: Path, inputs: Inputs, today: date) -> dict[str, bytes]:
+    """One rate card PDF per tier: "Rate card_I.pdf" (base) to "_III" (subsidised)."""
+    return {name: weasyprint.HTML(string=html, base_url=str(base / "template")).write_pdf()
+            for name, html in rate_card_pages(base, inputs, today).items()}
+
+
+def rate_card_pages(base: Path, inputs: Inputs, today: date) -> dict[str, str]:
+    """Each tier's rate card as HTML, by file name.
+
+    Each lists its own tier and every dearer one, base first, so a client is
+    shown their rates beside the full ones and never a cheaper tier's. A card
+    with base alone leaves out the Discount column.
+    """
+    card, config = inputs.rates, inputs.config
+    env = template_env(base)
+    present = [t for t in TIERS if t in card.rates]  # dearest first
+    pages = {}
+    for i, tier in enumerate(present):
+        listed = present[:i + 1]
+        context = {
+            "business": config.raw["business"],
+            "tax": {"gst_registered": config.gst_registered, "abn": config.raw["tax"].get("abn")},
+            "as_at": long_date(today),
+            "headers": card.headers,
+            "units": UNITS,
+            "show_discount": len(listed) > 1 and bool(card.headers["discount"]),
+            "rows": [{"tier": card.shown[t][0], "discount": card.shown[t][1],
+                      "rates": card.rates[t]} for t in listed],
+            "notes": [{"heading": h, "text": text} for h, text in card.notes],
+        }
+        pages[f"Rate card_{CARD_NUMERALS[tier]}.pdf"] = (
+            env.get_template("rate_card.html").render(context))
+    return pages
+
+
 # ---- Turnover and the preview summary ---------------------------------------
 
 
@@ -1380,7 +1496,6 @@ def rolling_turnover(ledger: Ledger, batch: Batch | None, end: date) -> Decimal:
 def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
     """What the run prints before asking for `commit`. Empty sections are left out."""
     config = inputs.config
-    owner = {p: c for c in inputs.clients for p in c.projects}
     note = " (set in config.txt)" if config.invoice_date_set else ""
     out = [f"Invoice date  {long_date(config.invoice_date)}{note}", ""]
 
@@ -1402,25 +1517,35 @@ def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
     if batch.week_report:
         out += ["", "Booked weeks", *batch.week_report]
 
+    def listing(rows: list[Entry]) -> list[str]:
+        # Laid out like the timesheet, without the task text, to stay short.
+        rows = sorted(rows, key=lambda e: e.date)
+        dates = [full_date(e.date) for e in rows]
+        hours = [fmt_hours(e.hours) for e in rows]
+        dw, hw = max(4, *map(len, dates)), max(5, *map(len, hours))
+        return [f"  {'Date':<{dw}}  {'Hours':>{hw}}  Project",
+                *(f"  {d:<{dw}}  {h:>{hw}}  {e.project}" for d, h, e in zip(dates, hours, rows))]
+
     # A forgotten fixed-price amount would never be billed and never complain,
     # so every fixed-price row that charged nothing is shown here.
-    unsent = {e for e, _ in batch.not_sent}
-    uncharged = sorted((e for e in inputs.entries
-                        if e.billing == "fixed price" and e.amount is None and e not in unsent),
-                       key=lambda e: e.date)
+    unsent = {e for e, _ in (*batch.not_sent, *batch.held_back)}
+    uncharged = [e for e in inputs.entries
+                 if e.billing == "fixed price" and e.amount is None and e not in unsent]
     if uncharged:
-        width = max(len(owner[e.project].name) for e in uncharged)
-        out += ["", "Fixed-price hours with no charge"]
-        out += [f"  {owner[e.project].name:<{width}}  {short_date(e.date):>6}  "
-                f"{fmt_hours(e.hours):>5}h  {e.task}" for e in uncharged]
+        out += ["", "Fixed-price hours with no charge", *listing(uncharged)]
 
+    if batch.held_back:
+        out += ["", f"Not invoiced yet: {config.invoice_date:%B %Y}",
+                *listing([e for e, _ in batch.held_back])]
     if batch.not_sent:
         names = ", ".join(sorted({c.name for _, c in batch.not_sent}))
-        width = max(len(c.name) for _, c in batch.not_sent)
-        out += ["", f"Not sent: no invoice this run for {names}"]
-        out += [f"  {c.name:<{width}}  {short_date(e.date):>6}  {fmt_hours(e.hours):>5}h  "
-                f"{e.task}" for e, c in batch.not_sent]
+        out += ["", f"Not sent: no invoice this run for {names}",
+                *listing([e for e, _ in batch.not_sent])]
+    if batch.held_back or batch.not_sent:
         out.append(f"  On commit these go to {NOT_SENT}, to paste back into Notion.")
+    if inputs.relative_as_of is not None:
+        out += ["", "Recent Notion dates (Yesterday, Last Thursday) read as of "
+                    f"{long_date(inputs.relative_as_of)}, the day timesheet.txt was saved."]
 
     turnover = rolling_turnover(inputs.ledger, batch, config.invoice_date)
     threshold = config.turnover_threshold
@@ -1434,22 +1559,38 @@ def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
             out.append(f"  ! Past {config.turnover_warn_at:.0%} of the GST registration "
                        "threshold.")
 
-    drafts = {0: "summary.csv is", 1: "The draft invoice and summary.csv are"}.get(
-        len(batch.invoices), "The draft invoices and summary.csv are")
-    out += ["", f"{drafts} open in Finder: {preview}"]
+    if batch.invoices:
+        drafts = "The draft invoice" + ("s" if len(batch.invoices) > 1 else "")
+        listed = f"{drafts}, summary.csv and the rate cards"
+    else:
+        listed = "The rate cards and summary.csv"
+    out += ["", f"{listed} are open in Finder: {preview}"]
     return out
 
 
 NOT_SENT = "timesheet_not_sent.txt"
 
 
+def full_date(d: date) -> str:
+    return f"{d:%B} {d.day}, {d.year}"  # November 2, 2026, as Notion writes it
+
+
 def not_sent_table(inputs: Inputs, batch: Batch) -> bytes | None:
-    """The rows not sent this run, as pasted, ready to paste back into Notion."""
-    if not batch.not_sent:
+    """The rows held back or not sent this run, ready to paste back into Notion.
+
+    Rows are as pasted, except that a relative date ("Last Thursday") is
+    written out in full, since pasted back it would stay that text forever.
+    """
+    rows = [e for e, _ in (*batch.held_back, *batch.not_sent)]
+    if not rows:
         return None
+
+    def line(e: Entry) -> str:
+        return e.line.replace(e.date_text, full_date(e.date), 1) if e.date_text else e.line
+
     width = len(split_row(inputs.timesheet_header) or [])
     lines = [inputs.timesheet_header, "| " + " | ".join(["---"] * width) + " |",
-             *(e.line for e, _ in batch.not_sent)]
+             *(line(e) for e in rows)]
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
@@ -1604,7 +1745,8 @@ def summary_after(inputs: Inputs, batch: Batch) -> bytes:
     return csv_text(rows).encode("utf-8")
 
 
-def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str]:
+def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes,
+           cards: dict[str, bytes]) -> list[str]:
     """Keep the run: final PDFs, then the ledger, then the reviewed summary.csv.
 
     Returns the problems found before anything is written; an empty list
@@ -1658,7 +1800,8 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str
             with open(path, "xb") as f:
                 written.append(path)
                 f.write(pdfs[inv.number])
-        replace_atomically(ledger_path, new_ledger)
+        if rows:
+            replace_atomically(ledger_path, new_ledger)
     except BaseException:
         for path in written:
             path.unlink(missing_ok=True)
@@ -1671,9 +1814,12 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str
               "ledger.csv is unchanged.", file=sys.stderr)
         raise
 
-    print(f"\nCommitted {len(written)} invoice{'s' if len(written) != 1 else ''}:")
-    print("\n".join(f"  {path.relative_to(base)}" for path in written))
-    print(f"ledger.csv: {len(rows)} rows added.")
+    if written:
+        print(f"\nCommitted {len(written)} invoice{'s' if len(written) != 1 else ''}:")
+        print("\n".join(f"  {path.relative_to(base)}" for path in written))
+        print(f"ledger.csv: {len(rows)} rows added.")
+    else:
+        print("\nNo invoices this run.")
 
     # The summary is already fully written beside its target, so all that is
     # left is one rename. It is derived from the ledger, so even if that fails
@@ -1691,8 +1837,8 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str
     try:
         if staged_not_sent is not None:
             os.replace(staged_not_sent, base / NOT_SENT)
-            print(f"{NOT_SENT}: {len(batch.not_sent)} rows not sent. Paste them back "
-                  "into Notion.")
+            print(f"{NOT_SENT}: {len(batch.held_back) + len(batch.not_sent)} rows not sent. "
+                  "Paste them back into Notion.")
         else:
             (base / NOT_SENT).unlink(missing_ok=True)
     except OSError as exc:
@@ -1700,6 +1846,21 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str
             staged_not_sent.unlink(missing_ok=True)
         print(f"{NOT_SENT} could not be written ({exc}). The rows not sent are listed "
               "above; put them back in Notion by hand.", file=sys.stderr)
+
+    # The rate cards replace the last ones. Like summary.csv they are derived,
+    # so a failure here costs nothing the next commit won't redo.
+    try:
+        folder = base / RATE_CARDS
+        folder.mkdir(exist_ok=True)
+        for old in [*folder.glob("Rate card_*.pdf"), *folder.glob("Rate card (*).pdf")]:
+            if old.name not in cards:
+                old.unlink()
+        for name, pdf in cards.items():
+            replace_atomically(folder / name, pdf)
+        print(f"{RATE_CARDS}/: {len(cards)} rate cards, dated today.")
+    except OSError as exc:
+        print(f"The rate cards could not be saved ({exc}). The next commit saves them.",
+              file=sys.stderr)
     return []
 
 
@@ -1731,9 +1892,6 @@ def run(base: Path, today: date, ask=input, open_folder=open_in_finder) -> int:
         report_errors(errors)
         return EXIT_REFUSED
     batch = compute(inputs)
-    if not batch.invoices and not batch.not_sent:
-        print("Nothing to do: timesheet.txt has no rows.")
-        return EXIT_COMMITTED
 
     preview = Path(tempfile.mkdtemp(prefix="invoice-preview-"))
     try:
@@ -1746,6 +1904,10 @@ def run(base: Path, today: date, ask=input, open_folder=open_in_finder) -> int:
         not_sent = not_sent_table(inputs, batch)
         if not_sent is not None:
             (preview / NOT_SENT).write_bytes(not_sent)
+        # Drawn every run, so a current, dated rate card is always to hand.
+        cards = rate_cards(base, inputs, today)
+        for name, pdf in cards.items():
+            (preview / name).write_bytes(pdf)
         print("\n".join(preview_summary(inputs, batch, preview)))
         open_folder(preview)
 
@@ -1756,7 +1918,7 @@ def run(base: Path, today: date, ask=input, open_folder=open_in_finder) -> int:
         if answer.strip() != "commit":
             print("\nDiscarded. Nothing was written.")
             return EXIT_DISCARDED
-        problems = commit(base, inputs, batch, summary)
+        problems = commit(base, inputs, batch, summary, cards)
         if problems:
             report_errors(problems)
             return EXIT_REFUSED

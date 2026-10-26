@@ -1,4 +1,6 @@
+import re
 import shutil
+from datetime import date
 
 import pytest
 
@@ -83,8 +85,8 @@ def test_business_address_keeps_its_lines(render):
 def test_amounts_and_currency(render):
     html = render("INV-0004")
     assert "5,517.24" in html and "Total SEK" in html and "9,448.29" in html
-    assert "<th>Issued</th><td>11 December 2026</td>" in html
-    assert "<th>Due</th><td>10 January 2027</td>" in html
+    assert "<th>Issued</th><td>11 January 2027</td>" in html
+    assert "<th>Due</th><td>10 February 2027</td>" in html
     assert "<th>Period</th><td>November 2026</td>" in html
 
 
@@ -160,4 +162,57 @@ def test_missing_template_is_refused_before_anything_runs(folder):
     shutil.rmtree(folder.path / "template")
     _, errors = folder.check()
     assert errors[0].startswith("template/invoice.html — not found")
-    assert len(errors) == 2
+    assert len(errors) == 3
+
+
+# ---- Rate cards -------------------------------------------------------------
+
+
+@pytest.fixture
+def cards(folder):
+    from make_invoices import rate_card_pages
+    def go():
+        inputs, errors = folder.check()
+        assert errors == []
+        return rate_card_pages(folder.path, inputs, date(2026, 10, 26))
+    return go
+
+
+def tiers_on(html):
+    return re.findall(r'<td class="desc">([^<]+)</td>', html)
+
+
+def test_one_card_per_tier_showing_it_and_every_dearer_one(cards):
+    pages = cards()
+    assert list(pages) == ["Rate card_I.pdf", "Rate card_II.pdf",
+                           "Rate card_III.pdf"]
+    assert tiers_on(pages["Rate card_I.pdf"]) == ["Base"]
+    assert tiers_on(pages["Rate card_II.pdf"]) == ["Base", "Discounted"]
+    assert tiers_on(pages["Rate card_III.pdf"]) == ["Base", "Discounted", "Subsidised"]
+
+
+def test_card_prints_the_rates_and_headers_as_written(cards):
+    html = cards()["Rate card_II.pdf"]
+    assert "<th class=\"num\">Day (8 hr)</th>" in html and "Week (40 hr)" in html
+    assert "<th class=\"num\">Discount</th>" in html and "<td class=\"num\">25%</td>" in html
+    assert "2,250.00" in html and "600.00" in html and "90.00" in html
+    assert "<th>Rates as at</th><td>26 October 2026</td>" in html
+    assert "<td>AUD</td>" in html and "GST" not in html
+
+
+def test_base_card_leaves_out_the_discount_column(cards):
+    html = cards()["Rate card_I.pdf"]
+    assert "Discount" not in html and "3,000.00" in html
+
+
+def test_card_carries_the_explanatory_row(cards):
+    html = cards()["Rate card_III.pdf"]
+    assert "<h3>How it&#39;s charged</h3>" in html  # the apostrophe, escaped
+    assert "<p>Hours are logged to the quarter hour. Eight or more hours" in html
+
+
+def test_card_says_excluding_gst_once_registered(folder, cards):
+    folder.edit("config.txt", "gst_registered = false", "gst_registered = true")
+    html = cards()["Rate card_I.pdf"]
+    assert "<td>AUD, excluding GST</td>" in html and "ABN 00 000 000 000" in html
+

@@ -31,7 +31,7 @@ def test_config_values(folder):
     assert config.gst_registered is False
     assert config.home_currency == "AUD"
     assert config.fx["SEK"].rate == Decimal("0.1450")  # exact, not a float
-    assert config.fx["SEK"].as_at == date(2026, 12, 11)
+    assert config.fx["SEK"].as_at == date(2027, 1, 11)
     assert set(config.payment) == {"AUD", "SEK"}
     assert config.number_prefix == "INV-" and config.number_padding == 4
 

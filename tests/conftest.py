@@ -11,7 +11,7 @@ sys.path.insert(0, str(REPO))
 import make_invoices  # noqa: E402  (needs the path above)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-TODAY = date(2026, 12, 11)  # after the fixtures' last row, and the SEK as_at date
+TODAY = date(2027, 1, 11)  # after the fixtures' last row, and the SEK as_at date
 
 
 @pytest.fixture

@@ -32,7 +32,7 @@ def setup(tmp_path):
         shutil.copy(f, folder / f.name)
     config = folder / "config.txt"
     config.write_text(config.read_text().replace("# invoice_date = 2026-11-30",
-                                                 "invoice_date = 2026-12-11"))
+                                                 "invoice_date = 2027-01-11"))
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     opened = tmp_path / "opened"

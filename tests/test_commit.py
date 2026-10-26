@@ -70,7 +70,7 @@ def test_ledger_rows(folder):
     work = rows[0]
     assert {k: work[k] for k in ("invoice_no", "invoice_date", "client", "date", "hours", "task",
                                  "project", "billing_type", "ref", "amount")} == {
-        "invoice_no": "INV-0001", "invoice_date": "2026-12-11",
+        "invoice_no": "INV-0001", "invoice_date": "2027-01-11",
         "client": "Bluegum Theatre Company", "date": "2026-09-07", "hours": "2",
         "task": "Lantern concept sketches", "project": "Stage Lantern", "billing_type": "",
         "ref": "PO BT-0001", "amount": ""}
@@ -80,7 +80,7 @@ def test_ledger_rows(folder):
                                 "fx_source", "amount_aud", "tier", "gst_treatment",
                                 "gst_amount")} == {
         "unit": "hour", "qty": "4.75", "rate": "827.59", "amount": "3931.05", "currency": "SEK",
-        "fx_rate": "0.1450", "fx_date": "2026-12-11",
+        "fx_rate": "0.1450", "fx_date": "2027-01-11",
         "fx_source": "TEST DATA — not a real rate source", "amount_aud": "570.00",
         "tier": "base", "gst_treatment": "unregistered", "gst_amount": ""}
 
@@ -115,18 +115,18 @@ def test_summary_csv(folder):
     commit_run(folder)
     assert (folder.path / "summary.csv").read_text() == (
         "work_month,client,invoice,invoiced,hours,AUD,SEK,total_aud\n"
-        "2026-09,Bluegum Theatre Company,INV-0001,2026-12,3.25,390.00,,390.00\n"
-        "2026-09,Tidewater Labs,INV-0002,2026-12,9.25,712.50,,712.50\n"
+        "2026-09,Bluegum Theatre Company,INV-0001,2027-01,3.25,390.00,,390.00\n"
+        "2026-09,Tidewater Labs,INV-0002,2027-01,9.25,712.50,,712.50\n"
         "2026-09,Total,,,12.5,1102.50,,1102.50\n"
-        "2026-11,Bluegum Theatre Company,INV-0003,2026-12,94.75,7850.00,,7850.00\n"
-        "2026-11,Fjordlight AB,INV-0004,2026-12,12.75,,9448.29,1370.00\n"
-        "2026-11,Northside Makers Trust,INV-0005,2026-12,14.5,1800.00,,1800.00\n"
-        "2026-11,Tidewater Labs,INV-0006,2026-12,2,180.00,,180.00\n"
+        "2026-11,Bluegum Theatre Company,INV-0003,2027-01,94.75,7850.00,,7850.00\n"
+        "2026-11,Fjordlight AB,INV-0004,2027-01,12.75,,9448.29,1370.00\n"
+        "2026-11,Northside Makers Trust,INV-0005,2027-01,14.5,1800.00,,1800.00\n"
+        "2026-11,Tidewater Labs,INV-0006,2027-01,2,180.00,,180.00\n"
         "2026-11,Total,,,124,9830.00,9448.29,11200.00\n"
-        "2026-12,Northside Makers Trust,INV-0007,2026-12,11.25,2000.00,,2000.00\n"
+        "2026-12,Northside Makers Trust,INV-0007,2027-01,11.25,2000.00,,2000.00\n"
         "2026-12,Total,,,11.25,2000.00,,2000.00\n"
         "\n"
-        ',"Turnover, 12 months to 2026-12-11",,,,,,14302.50\n'
+        ',"Turnover, 12 months to 2027-01-11",,,,,,14302.50\n'
     )
 
 
@@ -137,7 +137,7 @@ def test_summary_has_a_column_only_for_currencies_invoiced(folder):
     commit_run(folder)
     summary = (folder.path / "summary.csv").read_text().splitlines()
     assert summary[0] == "work_month,client,invoice,invoiced,hours,AUD,total_aud"
-    assert summary[-1] == ',"Turnover, 12 months to 2026-12-11",,,,,12932.50'
+    assert summary[-1] == ',"Turnover, 12 months to 2027-01-11",,,,,12932.50'
 
 
 def test_commit_prints_what_it_kept(folder, capsys):
@@ -145,7 +145,8 @@ def test_commit_prints_what_it_kept(folder, capsys):
     out = capsys.readouterr().out
     assert "Committed 7 invoices:\n  invoices/2026-09/INV-0001.pdf\n" in out
     assert out.endswith("ledger.csv: 40 rows added.\n"
-                        "summary.csv: replaced with the one in the preview.\n")
+                        "summary.csv: replaced with the one in the preview.\n"
+                        "rate cards/: 3 rate cards, dated today.\n")
 
 
 def test_committed_summary_is_the_one_in_the_preview(folder):
@@ -206,7 +207,7 @@ def test_next_month_continues_the_numbering(folder):
     assert commit_run(folder) == EXIT_COMMITTED
     assert pdfs_on_disk(folder)["invoices/2026-12"] == ["INV-0007.pdf", "INV-0008.pdf"]
     summary = (folder.path / "summary.csv").read_text()
-    assert "2026-12,Tidewater Labs,INV-0008,2026-12,2,180.00,,180.00\n" in summary
+    assert "2026-12,Tidewater Labs,INV-0008,2027-01,2,180.00,,180.00\n" in summary
 
 
 # ---- Refused before anything is written -------------------------------------
@@ -285,7 +286,7 @@ def test_a_month_with_nothing_charged_is_recorded_under_the_clients_invoice(fold
                                                        "Tool wall finishing and delivery")]
     assert [r["invoice_no"] for r in rows] == ["INV-0005", "INV-0005"]
     assert not [r for r in ledger(folder) if r["row_type"] == "work" and not r["invoice_no"]]
-    assert "2026-11,Northside Makers Trust,INV-0005,2026-12,25.75," in (
+    assert "2026-11,Northside Makers Trust,INV-0005,2027-01,25.75," in (
         folder.path / "summary.csv").read_text()
 
 
@@ -312,4 +313,14 @@ def test_an_old_not_sent_file_is_removed_by_the_next_commit(folder):
     (folder.path / "timesheet_not_sent.txt").write_text("| stale |\n")
     commit_run(folder)
     assert not (folder.path / "timesheet_not_sent.txt").exists()
+
+
+def test_rate_cards_are_saved_on_commit_replacing_old_ones(folder):
+    (folder.path / "rate cards").mkdir()
+    (folder.path / "rate cards" / "Rate card (Retired).pdf").write_bytes(b"old")
+    commit_run(folder)
+    saved = sorted(p.name for p in (folder.path / "rate cards").iterdir())
+    assert saved == ["Rate card_I.pdf", "Rate card_II.pdf",
+                     "Rate card_III.pdf"]
+    assert (folder.path / "rate cards" / "Rate card_I.pdf").read_bytes().startswith(b"%PDF")
 

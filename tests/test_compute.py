@@ -43,7 +43,7 @@ def test_one_invoice_per_client_per_month_numbered_in_date_order(invoices):
 
 def test_dates_and_terms(invoices):
     first = invoices["INV-0001"]
-    assert first.date == date(2026, 12, 11) and first.due_date == date(2027, 1, 10)
+    assert first.date == date(2027, 1, 11) and first.due_date == date(2027, 2, 10)
 
 
 def test_hours_add_up_into_one_line_per_project(invoices):

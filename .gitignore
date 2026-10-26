@@ -20,3 +20,6 @@ __pycache__/
 
 # Rows not sent, written for pasting back into Notion. Real data.
 /timesheet_not_sent.txt
+
+# Rate cards carry your business details and rates.
+/rate cards/

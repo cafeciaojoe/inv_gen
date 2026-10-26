@@ -28,7 +28,7 @@ next to your data:
 
 - `make_invoices.py`
 - `Make invoices.command`
-- `template/`
+- `template/` (it holds the invoice and rate card templates)
 
 To update later, drag them in again and replace the old ones. Your data files
 aren't touched. Copy them; don't make aliases or symlinks, or the script will go
@@ -54,6 +54,10 @@ the numbering carries on from them.
 1. **Paste the timesheet.** In Notion, select the rows you haven't billed yet, copy,
    and paste over everything in `timesheet.txt`. If clients or rates changed,
    paste those tables too.
+   Invoice any day after the month ends. Rows from the current month are held back
+   (they're listed as "Not invoiced yet"), and Notion's recent dates like
+   "Last Thursday" are read as of the day you pasted, so there's no need to wait
+   for Notion to turn them into full dates.
 2. **If you're billing in SEK**, set `rate` and `as_at` under `[currency.SEK]` in
    `config.txt` to today's rate. The run refuses if `as_at` isn't the invoice date.
 3. **Double-click `Make invoices.command`.** A Terminal window opens and checks
@@ -124,6 +128,7 @@ The usual ones:
 | --- | --- |
 | no column starts with "Amount" | Add an Amount column to your Notion timesheet (see [The timesheet](#the-timesheet)). |
 | … row has no tag | Every week rate and fixed price row needs a tag; it prints on the invoice. |
+| Date "Tomorrow" is a future date | Work can't be dated in the future. Fix the date in Notion. |
 | Hours "-" is not a number | Hours must be a number. For a fixed-price payment with no hours, put `0`. |
 | unknown Project value | The project isn't in Active Projects in your Clients table. Add it, or fix the spelling. |
 | this line may already be billed | You pasted a row that's already in the ledger. Leave it out. If it really is new work, make its Task text different. |
@@ -155,6 +160,7 @@ its work is dated after that date.
 | `ledger.csv` | the script | Only to add opening rows. Never change or delete a row. |
 | `summary.csv` | the script, on every commit | No. It's rebuilt from the ledger each time. |
 | `timesheet_not_sent.txt` | the script, when rows weren't sent | No. Paste it back into Notion. |
+| `rate cards/` | the script, on every commit | No. Send the one for the client's tier. |
 | `invoices/` | the script | No. |
 
 `ledger.csv` is the only file that matters for your records: everything else can
@@ -186,6 +192,25 @@ show_week_rate_hours = true      # false, e.g. for a week sold as a deliverable
 
 The Terminal summary reminds you how they're set whenever an invoice has those
 kinds of row. The total hours on page 2 only ever counts the hours it shows.
+
+## Rate cards
+
+Every run also draws three rate cards from `rates.txt`, in the same style as the
+invoices and dated that day. They're in the Finder preview with the drafts, and
+committing saves them to `rate cards/`, replacing the last ones. Send the one for the
+client's tier:
+
+| File | Shows |
+| --- | --- |
+| `Rate card_I.pdf` | Base |
+| `Rate card_II.pdf` | Base and Discounted |
+| `Rate card_III.pdf` | Base, Discounted and Subsidised |
+
+They're numbered rather than named for the tier, so the file a client gets doesn't say
+which tier they're on.
+
+To get a fresh card without invoicing, empty `timesheet.txt` down to its header row
+and run: the preview opens with just the rate cards.
 
 ## Turning on GST
 

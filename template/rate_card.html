@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rate card</title>
+  <link rel="stylesheet" href="invoice.css">
+</head>
+<body>
+
+  {# One card per tier: it lists that tier and every dearer one, so a client
+     sees their own rates against the full ones and never a cheaper tier. #}
+
+  <header class="masthead">
+    <div class="from">
+      <h1>{{ business.trading_name }}</h1>
+      <p class="address">{{ business.address | lines }}</p>
+      <p>
+        {{ business.email }}{% if business.phone %}<br>{{ business.phone }}{% endif %}
+        {% if tax.gst_registered and tax.abn %}<br>ABN {{ tax.abn }}{% endif %}
+      </p>
+    </div>
+    <div class="title">
+      <h2>Rate card</h2>
+      <table class="meta">
+        <tr><th>Rates as at</th><td>{{ as_at }}</td></tr>
+        <tr><th>Prices</th><td>AUD{% if tax.gst_registered %}, excluding GST{% endif %}</td></tr>
+      </table>
+    </div>
+  </header>
+
+  <table class="charges">
+    <thead>
+      <tr>
+        <th class="desc">{{ headers.tier }}</th>
+        {% if show_discount %}<th class="num">{{ headers.discount }}</th>{% endif %}
+        {% for unit in units %}<th class="num">{{ headers[unit] }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="desc">{{ row.tier }}</td>
+        {% if show_discount %}<td class="num">{{ row.discount }}</td>{% endif %}
+        {% for unit in units %}<td class="num">{{ row.rates[unit] | money }}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% for note in notes %}
+  <section class="pay">
+    {% if note.heading %}<h3>{{ note.heading }}</h3>{% endif %}
+    <p>{{ note.text }}</p>
+  </section>
+  {% endfor %}
+
+</body>
+</html>

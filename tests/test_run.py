@@ -50,7 +50,9 @@ def committed(monkeypatch):
 def test_drafts_are_rendered_outside_the_folder_then_deleted(folder):
     prompt = Prompt()
     run_with(folder, prompt)
-    assert prompt.drafts == [f"INV-000{n}.pdf" for n in range(1, 8)] + ["summary.csv"]
+    assert prompt.drafts == [f"INV-000{n}.pdf" for n in range(1, 8)] + [
+        "Rate card_I.pdf", "Rate card_II.pdf", "Rate card_III.pdf",
+        "summary.csv"]
     assert folder.path not in prompt.preview.parents
     assert not prompt.preview.exists()
 
@@ -99,13 +101,15 @@ def test_a_crash_while_rendering_still_deletes_the_preview(folder, monkeypatch):
     assert made and not make_invoices.Path(made[0]).exists()
 
 
-def test_empty_timesheet_has_nothing_to_do(folder, capsys):
+def test_empty_timesheet_still_offers_the_rate_cards(folder, capsys):
     header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
     (folder.path / "timesheet.txt").write_text("\n".join(header) + "\n")
     prompt = Prompt()
-    assert run_with(folder, prompt) == EXIT_COMMITTED
-    assert not prompt.asked
-    assert "Nothing to do" in capsys.readouterr().out
+    assert run_with(folder, prompt) == EXIT_DISCARDED
+    assert prompt.drafts == ["Rate card_I.pdf", "Rate card_II.pdf",
+                             "Rate card_III.pdf", "summary.csv"]
+    out = capsys.readouterr().out
+    assert "No invoices" in out and "The rate cards and summary.csv are open in Finder" in out
 
 
 # ---- The summary ------------------------------------------------------------
@@ -115,18 +119,20 @@ def test_summary_for_the_fixtures(folder, capsys):
     prompt = Prompt()
     run_with(folder, prompt)
     out = capsys.readouterr().out
-    assert out.startswith("Invoice date  11 December 2026\n\n")
+    assert out.startswith("Invoice date  11 January 2027\n\n")
     assert "  INV-0003  Nov 2026  Bluegum Theatre Company  AUD      7,850.00\n" in out
     assert "  INV-0004  Nov 2026  Fjordlight AB            SEK      9,448.29\n" in out
     assert ("\n\nHours on the invoices: fixed price hidden, week rate shown "
             "(set in config.txt)\n") in out
     assert "\nBooked weeks\n  ! Lantern build week" in out
     assert ("\nFixed-price hours with no charge\n"
-            "  Northside Makers Trust  23 Nov      6h  Tool wall layout and CAD\n"
-            "  Northside Makers Trust   2 Dec      7h  Tool wall revisions\n") in out
+            "  Date               Hours  Project\n"
+            "  November 23, 2026      6  Tool Wall\n"
+            "  December 2, 2026       7  Tool Wall\n") in out
     assert "Turnover, last 12 months: A$14,302.50 of A$75,000, including this run\n" in out
     assert "  ! " not in out.split("Turnover")[1]  # no threshold warning
-    assert f"The draft invoices and summary.csv are open in Finder: {prompt.preview}\n" in out
+    assert (f"The draft invoices, summary.csv and the rate cards are open in Finder: "
+            f"{prompt.preview}\n") in out
     assert out.endswith("Discarded. Nothing was written.\n")
 
 
@@ -134,8 +140,8 @@ def test_finder_line_matches_what_is_in_the_folder(folder, capsys):
     header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
     one = "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |  |"
     none = "| December 10, 2026 | 2 | Tool wall touch-up | Tool Wall | fixed price | Tool wall build |  |"
-    for row, expected in [(one, "The draft invoice and summary.csv are"),
-                          (none, "summary.csv is")]:
+    for row, expected in [(one, "The draft invoice, summary.csv and the rate cards are"),
+                          (none, "The rate cards and summary.csv are")]:
         (folder.path / "timesheet.txt").write_text("\n".join(header + [row]) + "\n")
         prompt = Prompt()
         run_with(folder, prompt)
@@ -143,10 +149,10 @@ def test_finder_line_matches_what_is_in_the_folder(folder, capsys):
 
 
 def test_override_date_is_flagged(folder, capsys):
-    folder.edit("config.txt", "# invoice_date = 2026-11-30", "invoice_date = 2026-12-11")
-    run_with(folder, Prompt(), today=date(2027, 1, 5))
+    folder.edit("config.txt", "# invoice_date = 2026-11-30", "invoice_date = 2027-01-11")
+    run_with(folder, Prompt(), today=date(2027, 2, 5))
     assert capsys.readouterr().out.startswith(
-        "Invoice date  11 December 2026 (set in config.txt)\n")
+        "Invoice date  11 January 2027 (set in config.txt)\n")
 
 
 def test_sections_with_nothing_in_them_are_left_out(folder, capsys):
@@ -181,7 +187,7 @@ def test_turnover_over_the_threshold(folder, capsys):
 
 def test_turnover_window_is_twelve_months(folder, capsys):
     # Exactly a year before the invoice date falls outside the window.
-    line = turnover_line(folder, capsys, "61000.00", day="2025-12-11")
+    line = turnover_line(folder, capsys, "61000.00", day="2026-01-11")
     assert line.startswith("last 12 months: A$14,302.50 ")
 
 

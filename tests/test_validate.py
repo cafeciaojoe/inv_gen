@@ -64,7 +64,7 @@ def test_line_already_in_the_ledger(folder):
 
 def test_line_logged_without_an_invoice(folder):
     folder.append("ledger.csv",
-                  "work,,2026-12-11,Northside Makers Trust,2026-12-02,7,Tool wall revisions,"
+                  "work,,2027-01-11,Northside Makers Trust,2026-12-02,7,Tool wall revisions,"
                   "Tool Wall,fixed price," + LEDGER_TAIL + "\n")
     assert only_error(folder).startswith(
         "timesheet.txt — this line may already be logged, as fixed-price work with nothing "
@@ -163,9 +163,9 @@ def test_unbilled_client_cannot_stop_the_run(folder):
 
 
 def test_exchange_rate_must_be_dated_to_the_invoice_date(folder):
-    assert only_error(folder, today=date(2026, 12, 12)) == (
-        "config.txt — as_at under [currency.SEK] is 2026-12-11 but the invoice date is "
-        "2026-12-12. Update rate and as_at to that day's rate (needed for Fjordlight AB)."
+    assert only_error(folder, today=date(2027, 1, 12)) == (
+        "config.txt — as_at under [currency.SEK] is 2027-01-11 but the invoice date is "
+        "2027-01-12. Update rate and as_at to that day's rate (needed for Fjordlight AB)."
     )
 
 
@@ -181,7 +181,7 @@ def test_work_after_the_invoice_date(folder):
 
 def test_forgotten_override_is_caught(folder):
     folder.edit("config.txt", "# invoice_date = 2026-11-30", "invoice_date = 2026-11-30")
-    folder.edit("config.txt", "as_at = 2026-12-11", "as_at = 2026-11-30")
+    folder.edit("config.txt", "as_at = 2027-01-11", "as_at = 2026-11-30")
     errors = errors_of(folder)
     assert len(errors) == 2  # the two December rows
     assert all("(set by invoice_date in config.txt)" in e for e in errors)

@@ -48,7 +48,7 @@ source = "TEST DATA — not a real rate source"
 # rate is AUD per 1 SEK. as_at MUST equal the invoice date, or the run refuses.
 [currency.SEK]
 rate = 0.1450
-as_at = 2026-12-11
+as_at = 2027-01-11
 
 
 [invoicing]
