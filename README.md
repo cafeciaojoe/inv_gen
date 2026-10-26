@@ -68,6 +68,8 @@ the numbering carries on from them.
    one click, without Terminal asking to terminate anything.
 6. **Send the invoices** from `invoices/YYYY-MM/`.
 7. **Mark the rows as billed in Notion**, so they aren't pasted again next month.
+   If the Terminal said some rows were **not sent**, paste `timesheet_not_sent.txt`
+   back into Notion so they go out with a later invoice.
    If they are, the script refuses them as duplicates anyway.
 
 ### The timesheet
@@ -88,10 +90,10 @@ The tags print on page 1 of the invoice, so a fixed-price tag can name the payme
 `Lantern design (50% payment)`, then `Lantern design (100% payment)` for the next
 one. A fixed-price payment with no hours of its own takes `0` in Hours.
 
-Fixed-price rows without an amount, logged between payments, appear on page 2 of
-the next invoice that charges a fixed price on the same project, even months later,
-whatever their tag. Any fixed-price charge on the project counts, so a `Material costs`
-charge in between would collect them instead.
+Fixed-price rows without an amount, logged between payments, go on page 2 of the
+client's invoice in the same run, even if they're from earlier months. If a client
+has no invoice at all this run, those rows aren't sent: they're written to
+`timesheet_not_sent.txt` to paste back into Notion, ready for next time.
 
 ### When it refuses
 
@@ -147,6 +149,7 @@ its work is dated after that date.
 | `clients.txt`, `rates.txt`, `timesheet.txt` | pasted from Notion | No. Fix things in Notion and paste again. |
 | `ledger.csv` | the script | Only to add opening rows. Never change or delete a row. |
 | `summary.csv` | the script, on every commit | No. It's rebuilt from the ledger each time. |
+| `timesheet_not_sent.txt` | the script, when rows weren't sent | No. Paste it back into Notion. |
 | `invoices/` | the script | No. |
 
 `ledger.csv` is the only file that matters for your records: everything else can

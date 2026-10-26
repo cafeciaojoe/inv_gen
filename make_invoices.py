@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
@@ -623,14 +623,15 @@ class Entry:
     line: str
 
 
-def load_timesheet(base: Path, errors: list[str]) -> list[Entry]:
+def load_timesheet(base: Path, errors: list[str]) -> tuple[list[Entry], str]:
+    """The rows, and the header row as pasted (to write unsent rows back out)."""
     table = read_table(base, "timesheet.txt", errors)
     if table is None:
-        return []
+        return [], ""
     col = columns(table, ["Date", "Hours", "Task", "Project", "Billing type", "Week rate tag",
                           "Amount"], errors)
     if col is None:
-        return []
+        return [], table.line
 
     def bad(problem: str, row: Row, allowed: str | None = None):
         errors.append(row_error("timesheet.txt", problem, row.line, allowed))
@@ -694,7 +695,7 @@ def load_timesheet(base: Path, errors: list[str]) -> list[Entry]:
         if len(errors) == problems_before:
             entries.append(Entry(day, hours, cell("Task"), cell("Project"), billing, tag,
                                  amount, row.line))
-    return entries
+    return entries, table.line
 
 
 # ---- ledger.csv -------------------------------------------------------------
@@ -794,6 +795,7 @@ class Inputs:
     rates: RateCard
     entries: tuple[Entry, ...]
     ledger: Ledger
+    timesheet_header: str  # as pasted, for timesheet_not_sent.txt
 
 
 def load_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
@@ -807,11 +809,11 @@ def load_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
     currencies = {config.home_currency, *config.fx} if config else None
     clients = load_clients(base, currencies, errors)
     rates = load_rates(base, errors)
-    entries = load_timesheet(base, errors)
+    entries, header = load_timesheet(base, errors)
     ledger = load_ledger(base, errors)
     if errors:
         return None
-    return Inputs(config, tuple(clients), rates, tuple(entries), ledger)
+    return Inputs(config, tuple(clients), rates, tuple(entries), ledger, header)
 
 
 # ---- Cross-file checks ------------------------------------------------------
@@ -1025,9 +1027,6 @@ class Invoice:
     lines: tuple[Line, ...]
     entries: tuple[Entry, ...]  # the timesheet rows it covers, recorded under it
     show_hours: dict[str, bool]  # from config.txt: billing type -> hours shown
-    # Fixed-price rows from earlier runs, already in the ledger with no invoice,
-    # shown in this invoice's work log because it charges their job.
-    carried: tuple[Entry, ...] = ()
 
     def hours_shown(self, entry: Entry) -> bool:
         return self.show_hours[entry.billing]
@@ -1036,7 +1035,7 @@ class Invoice:
     def work_log(self) -> tuple[Entry, ...]:
         """Every row the invoice covers, by date. Rows whose hours are hidden
         still appear, with their billing type where the hours would be."""
-        return tuple(sorted((*self.entries, *self.carried), key=lambda e: e.date))
+        return tuple(sorted(self.entries, key=lambda e: e.date))
 
     @property
     def hours(self) -> Decimal:
@@ -1059,9 +1058,9 @@ class Invoice:
 @dataclass(frozen=True)
 class Batch:
     invoices: tuple[Invoice, ...]
-    # Fixed-price rows in a month where their client has nothing to charge.
-    # They are kept in the ledger as work with no invoice number.
-    logged_only: tuple[tuple[Entry, Client], ...]
+    # Rows for a client with no invoice this run. They are not sent and not
+    # recorded; commit writes them to timesheet_not_sent.txt for Notion.
+    not_sent: tuple[tuple[Entry, Client], ...]
     week_report: tuple[str, ...]
 
 
@@ -1205,66 +1204,16 @@ def week_report(entries: tuple[Entry, ...], card: RateCard) -> list[str]:
     return report
 
 
-def carry_forward(groups: dict[tuple[date, str], list[Entry]],
-                  ledger: Ledger) -> dict[tuple[date, str], list[Entry]]:
-    """Move uncharged fixed-price rows onto the next invoice that charges their project.
-
-    Fixed-price work between payments is logged with no amount, often over
-    months with nothing to charge, which make no invoice of their own. Those
-    rows go on the invoice of the next fixed-price charge on the same project
-    for the same client, whatever that charge's tag: tags name payments
-    ("Lantern design (50% payment)"), so the waiting rows carry the previous
-    payment's tag. Rows in this timesheet move to that invoice and are recorded
-    under it. Rows that earlier runs logged with no invoice, still waiting in
-    the ledger, are shown on it too. Returns those ledger rows for each invoice
-    group. `groups` is changed in place.
-    """
-    charges: dict[tuple[str, str], list[tuple[date, tuple[date, str]]]] = {}
-    for key, rows in groups.items():
-        for e in rows:
-            if e.billing == "fixed price" and e.amount is not None:
-                charges.setdefault((key[1], e.project), []).append((e.date, key))
-    for dates in charges.values():
-        dates.sort()
-
-    def next_charge(job: tuple[str, str], day: date) -> tuple[date, str] | None:
-        return next((key for charged, key in charges.get(job, []) if charged >= day), None)
-
-    for key, rows in list(groups.items()):
-        charged_here = {e.project for e in rows
-                        if e.billing == "fixed price" and e.amount is not None}
-        for e in list(rows):
-            if e.billing == "fixed price" and e.amount is None and e.project not in charged_here:
-                target = next_charge((key[1], e.project), e.date)
-                if target is not None:
-                    rows.remove(e)
-                    groups[target].append(e)
-    for key in [k for k, rows in groups.items() if not rows]:
-        del groups[key]
-
-    # A logged row dated before the project's last invoiced fixed-price row
-    # was carried onto that invoice already.
-    last_invoiced: dict[tuple[str, str], date] = {}
-    for w in ledger.work:
-        if w.billing_type == "fixed price" and w.invoice_no:
-            job = (w.client, w.project)
-            last_invoiced[job] = max(last_invoiced.get(job, w.date), w.date)
-    from_ledger: dict[tuple[date, str], list[Entry]] = {}
-    for w in ledger.work:
-        if w.billing_type != "fixed price" or w.invoice_no:
-            continue
-        job = (w.client, w.project)
-        if job in last_invoiced and w.date <= last_invoiced[job]:
-            continue
-        target = next_charge(job, w.date)
-        if target is not None:
-            from_ledger.setdefault(target, []).append(
-                Entry(w.date, w.hours, w.task, w.project, w.billing_type, w.tag, None, ""))
-    return from_ledger
-
-
 def compute(inputs: Inputs) -> Batch:
-    """Cut the checked inputs into invoices: one per client per work month."""
+    """Cut the checked inputs into invoices: one per client per work month.
+
+    A month with nothing to charge (fixed-price work between payments, logged
+    with no amount) makes no invoice of its own. Notion is the source of
+    truth, so what is pasted is sent: those rows go on the client's latest
+    invoice this run, whatever its project or month. A client with no invoice
+    this run gets no $0 invoice either; their rows are not sent or recorded,
+    and go back to Notion through timesheet_not_sent.txt.
+    """
     config, card = inputs.config, inputs.rates
     clients = {c.name: c for c in inputs.clients}
     owner = {p: c for c in inputs.clients for p in c.projects}
@@ -1272,18 +1221,17 @@ def compute(inputs: Inputs) -> Batch:
     groups: dict[tuple[date, str], list[Entry]] = {}
     for e in inputs.entries:
         groups.setdefault((e.date.replace(day=1), owner[e.project].name), []).append(e)
-    carried = carry_forward(groups, inputs.ledger)
 
     # Numbered in date order: by month, then client name within a month.
     number = highest_invoice_number(inputs.ledger, config.number_prefix)
-    invoices, logged_only = [], []
+    invoices, uncharged = [], []
     for month, name in sorted(groups):
         client, entries = clients[name], groups[(month, name)]
         home = client.currency == config.home_currency
         fx = None if home else config.fx[client.currency].rate
         lines = charge_lines(entries, client, card, fx, config.gst_registered)
         if not lines:
-            logged_only.extend((e, client) for e in entries)
+            uncharged.append((month, name))
             continue
         number += 1
         invoices.append(Invoice(
@@ -1297,9 +1245,18 @@ def compute(inputs: Inputs) -> Batch:
             lines=tuple(lines),
             entries=tuple(entries),
             show_hours=config.show_hours,
-            carried=tuple(carried.get((month, name), ())),
         ))
-    return Batch(tuple(invoices), tuple(logged_only), tuple(week_report(inputs.entries, card)))
+
+    latest = {inv.client.name: i for i, inv in enumerate(invoices)}  # by month, so last wins
+    not_sent = []
+    for month, name in uncharged:
+        rows = tuple(groups[(month, name)])
+        if name in latest:
+            i = latest[name]
+            invoices[i] = replace(invoices[i], entries=invoices[i].entries + rows)
+        else:
+            not_sent.extend((e, clients[name]) for e in rows)
+    return Batch(tuple(invoices), tuple(not_sent), tuple(week_report(inputs.entries, card)))
 
 
 # ---- PDFs -------------------------------------------------------------------
@@ -1444,14 +1401,23 @@ def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
 
     # A forgotten fixed-price amount would never be billed and never complain,
     # so every fixed-price row that charged nothing is shown here.
+    unsent = {e for e, _ in batch.not_sent}
     uncharged = sorted((e for e in inputs.entries
-                        if e.billing == "fixed price" and e.amount is None),
+                        if e.billing == "fixed price" and e.amount is None and e not in unsent),
                        key=lambda e: e.date)
     if uncharged:
         width = max(len(owner[e.project].name) for e in uncharged)
         out += ["", "Fixed-price hours with no charge"]
         out += [f"  {owner[e.project].name:<{width}}  {short_date(e.date):>6}  "
                 f"{fmt_hours(e.hours):>5}h  {e.task}" for e in uncharged]
+
+    if batch.not_sent:
+        names = ", ".join(sorted({c.name for _, c in batch.not_sent}))
+        width = max(len(c.name) for _, c in batch.not_sent)
+        out += ["", f"Not sent: no invoice this run for {names}"]
+        out += [f"  {c.name:<{width}}  {short_date(e.date):>6}  {fmt_hours(e.hours):>5}h  "
+                f"{e.task}" for e, c in batch.not_sent]
+        out.append(f"  On commit these go to {NOT_SENT}, to paste back into Notion.")
 
     turnover = rolling_turnover(inputs.ledger, batch, config.invoice_date)
     threshold = config.turnover_threshold
@@ -1469,6 +1435,19 @@ def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
         len(batch.invoices), "The draft invoices and summary.csv are")
     out += ["", f"{drafts} open in Finder: {preview}"]
     return out
+
+
+NOT_SENT = "timesheet_not_sent.txt"
+
+
+def not_sent_table(inputs: Inputs, batch: Batch) -> bytes | None:
+    """The rows not sent this run, as pasted, ready to paste back into Notion."""
+    if not batch.not_sent:
+        return None
+    width = len(split_row(inputs.timesheet_header) or [])
+    lines = [inputs.timesheet_header, "| " + " | ".join(["---"] * width) + " |",
+             *(e.line for e, _ in batch.not_sent)]
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 def open_in_finder(path: Path) -> None:
@@ -1539,8 +1518,6 @@ def ledger_rows(batch: Batch, config: Config) -> list[list[str]]:
                      gst_treatment=inv.gst_treatment,
                      gst_amount="" if l.gst is None else f"{l.gst:.2f}")
                  for l in inv.lines]
-    # Fixed-price work in a month with nothing to charge: kept, but not invoiced.
-    rows += [work(e, client, "") for e, client in batch.logged_only]
     return rows
 
 
@@ -1660,11 +1637,15 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str
             for inv in batch.invoices}
     new_ledger, rows = appended_ledger(inputs, batch)
 
+    not_sent = not_sent_table(inputs, batch)
+
     written: list[Path] = []
     made: list[Path] = []
-    staged_summary = None
+    staged_summary = staged_not_sent = None
     try:
         staged_summary = stage(base / "summary.csv", summary)
+        if not_sent is not None:
+            staged_not_sent = stage(base / NOT_SENT, not_sent)
         for inv in batch.invoices:
             path = targets[inv.number]
             for folder in (base / "invoices", path.parent):
@@ -1680,8 +1661,9 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str
             path.unlink(missing_ok=True)
         for folder in reversed(made):
             folder.rmdir()
-        if staged_summary is not None:
-            staged_summary.unlink(missing_ok=True)
+        for staged in (staged_summary, staged_not_sent):
+            if staged is not None:
+                staged.unlink(missing_ok=True)
         print("\nThe commit did not finish. The files it had written were removed and "
               "ledger.csv is unchanged.", file=sys.stderr)
         raise
@@ -1700,6 +1682,21 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes) -> list[str
         staged_summary.unlink(missing_ok=True)
         print(f"summary.csv could not be replaced ({exc}). The invoices and ledger.csv are "
               "kept; summary.csv is rebuilt on the next commit.", file=sys.stderr)
+
+    # Rows not sent go back to Notion. An old file is removed, so a stale list
+    # can't be pasted back by mistake.
+    try:
+        if staged_not_sent is not None:
+            os.replace(staged_not_sent, base / NOT_SENT)
+            print(f"{NOT_SENT}: {len(batch.not_sent)} rows not sent. Paste them back "
+                  "into Notion.")
+        else:
+            (base / NOT_SENT).unlink(missing_ok=True)
+    except OSError as exc:
+        if staged_not_sent is not None:
+            staged_not_sent.unlink(missing_ok=True)
+        print(f"{NOT_SENT} could not be written ({exc}). The rows not sent are listed "
+              "above; put them back in Notion by hand.", file=sys.stderr)
     return []
 
 
@@ -1731,7 +1728,7 @@ def run(base: Path, today: date, ask=input, open_folder=open_in_finder) -> int:
         report_errors(errors)
         return EXIT_REFUSED
     batch = compute(inputs)
-    if not batch.invoices and not batch.logged_only:
+    if not batch.invoices and not batch.not_sent:
         print("Nothing to do: timesheet.txt has no rows.")
         return EXIT_COMMITTED
 
@@ -1743,6 +1740,9 @@ def run(base: Path, today: date, ask=input, open_folder=open_in_finder) -> int:
         # The summary.csv this commit would leave, so the totals get read too.
         summary = summary_after(inputs, batch)
         (preview / "summary.csv").write_bytes(summary)
+        not_sent = not_sent_table(inputs, batch)
+        if not_sent is not None:
+            (preview / NOT_SENT).write_bytes(not_sent)
         print("\n".join(preview_summary(inputs, batch, preview)))
         open_folder(preview)
 

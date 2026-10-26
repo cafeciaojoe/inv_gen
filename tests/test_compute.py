@@ -187,13 +187,6 @@ def test_ledger_number_with_another_prefix_is_refused(folder):
                       "followed by digits"]
 
 
-def test_month_with_nothing_to_charge_makes_no_invoice(folder):
-    folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) |  |")
-    batch = batch_of(folder)
-    assert [i.number for i in batch.invoices][-1] == "INV-0006"
-    assert [e.date for e, _ in batch.logged_only] == [date(2026, 12, 2), date(2026, 12, 9)]
-
-
 def test_week_report(folder):
     assert batch_of(folder).week_report == (
         "  ! Lantern build week — agreed 14 Oct      34.5h  2 Nov to 6 Nov    <- 5.5h under",
@@ -209,11 +202,7 @@ def test_nominal_week_is_unmarked(folder):
     )
 
 
-# ---- Fixed-price rows carried to the project's next charge ------------------
-
-LOGGED = ("work,{invoice},2026-10-31,Northside Makers Trust,{day},8,{task},Tool Wall,fixed price,,"
-          "Tool wall build (50% payment)" + "," * 12 + "\n")
-
+# ---- Months with nothing to charge -----------------------------------------
 
 def invoice_for(batch, client, month):
     return next(i for i in batch.invoices if i.client.name == client and i.month == month)
@@ -255,31 +244,31 @@ def test_a_month_with_a_charge_on_the_project_keeps_its_own_rows(folder):
     assert [e.task for e in october.work_log] == ["Tool wall sketches", "3D printing filament"]
 
 
-def test_rows_waiting_in_the_ledger_are_shown_with_the_next_charge(folder):
-    folder.append("ledger.csv", LOGGED.format(invoice="", day="2026-10-15", task="Tool wall concept"))
-    nov = invoice_for(batch_of(folder), "Northside Makers Trust", date(2026, 11, 1))
-    assert [e.task for e in nov.carried] == ["Tool wall concept"]
-    assert nov.work_log[0].task == "Tool wall concept"
-    assert "Tool wall concept" not in [e.task for e in nov.entries]  # already in the ledger
-
-
-def test_rows_before_the_last_invoiced_payment_are_not_shown_again(folder):
-    folder.append("ledger.csv", LOGGED.format(invoice="", day="2026-10-15", task="Tool wall concept"))
-    folder.append("ledger.csv", LOGGED.format(invoice="INV-0001", day="2026-10-20",
-                                              task="Tool wall first cut"))
-    nov = invoice_for(batch_of(folder), "Northside Makers Trust", date(2026, 11, 1))
-    assert nov.carried == ()
-
-
-def test_rows_after_the_last_charge_wait_in_the_ledger(folder):
+def test_a_month_with_nothing_to_charge_goes_on_the_clients_latest_invoice(folder):
     folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) |  |")
     batch = batch_of(folder)
-    assert [e.task for e, _ in batch.logged_only] == [
+    assert [i.number for i in batch.invoices][-1] == "INV-0006"  # no December invoice
+    nov = invoice_for(batch, "Northside Makers Trust", date(2026, 11, 1))
+    assert [e.task for e in nov.work_log][-2:] == [
         "Tool wall revisions", "Tool wall finishing and delivery"]
+    assert batch.not_sent == ()
 
 
-def test_carried_hours_follow_the_setting(folder):
+def test_attached_rows_follow_the_hours_setting(folder):
+    folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) |  |")
     folder.edit("config.txt", "show_fixed_price_hours = false", "show_fixed_price_hours = true")
-    folder.append("ledger.csv", LOGGED.format(invoice="", day="2026-10-15", task="Tool wall concept"))
     nov = invoice_for(batch_of(folder), "Northside Makers Trust", date(2026, 11, 1))
-    assert nov.hours == D("22.5")  # 8 carried + 6 + 3.5 fixed + 5 hourly
+    assert nov.hours == D("25.75")  # 6 + 3.5 + 7 + 4.25 fixed + 5 hourly
+
+
+def test_a_client_with_no_invoice_this_run_is_not_sent(folder):
+    header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
+    rows = ["| October 12, 2026 | 6 | Bench frame welding | Wave Bench | fixed price | "
+            "Bench build (50% payment) |  |",
+            "| November 3, 2026 | 2 | Shade test print | Aurora Lamp |  |  |  |"]
+    (folder.path / "timesheet.txt").write_text("\n".join(header + rows) + "\n")
+    batch = batch_of(folder)
+    assert [i.client.name for i in batch.invoices] == ["Fjordlight AB"]
+    assert [(e.task, c.name) for e, c in batch.not_sent] == [
+        ("Bench frame welding", "Tidewater Labs")]
+

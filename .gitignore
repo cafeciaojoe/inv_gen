@@ -17,3 +17,6 @@
 __pycache__/
 .pytest_cache/
 .venv/
+
+# Rows not sent, written for pasting back into Notion. Real data.
+/timesheet_not_sent.txt

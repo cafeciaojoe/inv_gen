@@ -209,16 +209,6 @@ def test_next_month_continues_the_numbering(folder):
     assert "2026-12,Tidewater Labs,INV-0008,2026-12,2,180.00,,180.00\n" in summary
 
 
-def test_month_with_nothing_charged_is_logged_without_an_invoice(folder):
-    folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) |  |")
-    commit_run(folder)
-    logged = [r for r in ledger(folder) if r["invoice_no"] == ""]
-    assert [(r["date"], r["hours"], r["invoice_date"]) for r in logged] == [
-        ("2026-12-02", "7", "2026-12-11"), ("2026-12-09", "4.25", "2026-12-11")]
-    summary = (folder.path / "summary.csv").read_text()
-    assert "2026-12,Northside Makers Trust,,,11.25,,,0.00\n" in summary
-
-
 # ---- Refused before anything is written -------------------------------------
 
 
@@ -288,10 +278,38 @@ def test_no_temporary_files_left_behind(folder):
     assert not [p.name for p in folder.path.iterdir() if p.name.endswith(".tmp")]
 
 
-def test_rows_carried_from_an_earlier_month_are_recorded_under_the_invoice(folder):
-    folder.append("timesheet.txt",
-                  "| October 20, 2026 | 5 | Tool wall sketches | Tool Wall | fixed price | "
-                  "Tool wall build (50% payment) |  |\n")
+def test_a_month_with_nothing_charged_is_recorded_under_the_clients_invoice(folder):
+    folder.edit("timesheet.txt", "(100% payment) | 2000 |", "(100% payment) |  |")
     commit_run(folder)
-    row = next(r for r in ledger(folder) if r["task"] == "Tool wall sketches")
-    assert row["invoice_no"] == "INV-0005" and row["date"] == "2026-10-20"
+    rows = [r for r in ledger(folder) if r["task"] in ("Tool wall revisions",
+                                                       "Tool wall finishing and delivery")]
+    assert [r["invoice_no"] for r in rows] == ["INV-0005", "INV-0005"]
+    assert not [r for r in ledger(folder) if r["row_type"] == "work" and not r["invoice_no"]]
+    assert "2026-11,Northside Makers Trust,INV-0005,2026-12,25.75," in (
+        folder.path / "summary.csv").read_text()
+
+
+def test_rows_not_sent_are_written_back_for_notion(folder, capsys):
+    folder.append("timesheet.txt", "| September 20, 2026 | 3 | Lamp brief | Aurora Lamp | "
+                                   "fixed price | Lamp design (50% payment) |  |\n")
+    header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
+    kept = [line for line in (folder.path / "timesheet.txt").read_text().splitlines()
+            if "Aurora Lamp" in line and "September" in line]
+    (folder.path / "timesheet.txt").write_text("\n".join(header + kept + [
+        "| November 3, 2026 | 2 | Clock hands | Tide Clock |  |  |  |"]) + "\n")
+    preview = {}
+    assert commit_run(folder, preview=preview) == EXIT_COMMITTED
+    expected = (header[0] + "\n| --- | --- | --- | --- | --- | --- | --- |\n" + kept[0] + "\n")
+    assert (folder.path / "timesheet_not_sent.txt").read_text() == expected
+    assert preview["timesheet_not_sent.txt"].decode() == expected
+    assert "Lamp brief" not in [r["task"] for r in ledger(folder)]  # not recorded
+    out = capsys.readouterr().out
+    assert "Not sent: no invoice this run for Fjordlight AB" in out
+    assert "timesheet_not_sent.txt: 1 rows not sent. Paste them back into Notion." in out
+
+
+def test_an_old_not_sent_file_is_removed_by_the_next_commit(folder):
+    (folder.path / "timesheet_not_sent.txt").write_text("| stale |\n")
+    commit_run(folder)
+    assert not (folder.path / "timesheet_not_sent.txt").exists()
+
