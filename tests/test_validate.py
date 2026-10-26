@@ -98,11 +98,10 @@ def test_week_rows_disagreeing_on_a_custom_price(folder):
     )
 
 
-def test_week_tag_spanning_two_months(folder):
+def test_a_week_crossing_a_month_end_is_accepted(folder):
     folder.edit("timesheet.txt", "| November 2, 2026 | 8 |", "| October 30, 2026 | 8 |")
-    error = only_error(folder)
-    assert "spans two months" in error
-    assert error.endswith("Split it into two tags in Notion.")
+    _, errors = folder.check()
+    assert errors == []
 
 
 def test_week_tag_already_billed_even_with_other_capitals(folder):

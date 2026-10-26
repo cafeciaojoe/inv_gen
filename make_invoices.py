@@ -880,7 +880,8 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
             ) + f"\n  {retell}")
 
     # Week tags. Every row with one tag becomes one week charge, so the tag has
-    # to belong to one client and one month, and must not have been billed.
+    # to belong to one client and must not have been billed. A week may cross a
+    # month end: compute charges it in the month it ends.
     weeks: dict[str, list[tuple[Entry, Client]]] = {}
     for e, client in billed:
         if e.billing == "week rate":
@@ -903,12 +904,6 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
             errors.append(row_error(
                 "timesheet.txt", f'week rate tag "{tag}" has different Amounts on its rows',
                 lines, "one custom price for the week, on one row or the same on every row",
-            ))
-        if len({(e.date.year, e.date.month) for e, _ in rows}) > 1:
-            errors.append(row_error(
-                "timesheet.txt", f'week rate tag "{tag}" spans two months', lines,
-                "one month per tag, since invoices are cut by month. "
-                "Split it into two tags in Notion.",
             ))
         if _same_tag(tag) in billed_tags:
             errors.append(row_error(
@@ -1218,9 +1213,17 @@ def compute(inputs: Inputs) -> Batch:
     clients = {c.name: c for c in inputs.clients}
     owner = {p: c for c in inputs.clients for p in c.projects}
 
+    # A booked week that crosses a month end is charged once, in the month it
+    # ends: all its rows go on that month's invoice.
+    week_ends: dict[str, date] = {}
+    for e in inputs.entries:
+        if e.billing == "week rate":
+            week_ends[e.tag] = max(week_ends.get(e.tag, e.date), e.date)
+
     groups: dict[tuple[date, str], list[Entry]] = {}
     for e in inputs.entries:
-        groups.setdefault((e.date.replace(day=1), owner[e.project].name), []).append(e)
+        day = week_ends[e.tag] if e.billing == "week rate" else e.date
+        groups.setdefault((day.replace(day=1), owner[e.project].name), []).append(e)
 
     # Numbered in date order: by month, then client name within a month.
     number = highest_invoice_number(inputs.ledger, config.number_prefix)

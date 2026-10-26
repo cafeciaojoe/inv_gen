@@ -272,3 +272,16 @@ def test_a_client_with_no_invoice_this_run_is_not_sent(folder):
     assert [(e.task, c.name) for e, c in batch.not_sent] == [
         ("Bench frame welding", "Tidewater Labs")]
 
+
+def test_a_week_crossing_a_month_end_is_charged_once_in_the_month_it_ends(folder):
+    folder.edit("timesheet.txt", "| November 2, 2026 | 8 |", "| October 30, 2026 | 8 |")
+    batch = batch_of(folder)
+    bluegum = [i for i in batch.invoices if i.client.name == "Bluegum Theatre Company"]
+    assert [i.month for i in bluegum] == [date(2026, 9, 1), date(2026, 11, 1)]  # no October
+    nov = bluegum[-1]
+    weeks = [l for l in nov.lines if l.charge == "Week rate: Lantern build week — agreed 14 Oct"]
+    assert len(weeks) == 1 and weeks[0].amount == D("3000.00")
+    assert nov.work_log[0].date == date(2026, 10, 30)
+    assert batch.week_report[0].startswith("  ! Lantern build week — agreed 14 Oct      34.5h  "
+                                           "30 Oct to 6 Nov")
+

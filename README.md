@@ -86,6 +86,11 @@ fine, like the reminder in `Billing type (Week rate / Fixed Price)`:
 | `week rate` | names the booked week, the same on every row of it, e.g. `Lantern build week — agreed 14 Oct` | empty for the rate card's week price, or a custom price for that week |
 | `fixed price` | names the agreement, e.g. `Tool wall build` | on the row that charges, e.g. `1500`; empty on rows that only log hours |
 
+Booked weeks: give each week its own tag, even within a longer block
+(`Pole build — week 1 of 3 (agreed 20 Oct)`), date the rows when the work happens,
+and paste a week once it's finished, since a week is billed once. A week that runs
+across a month end is charged on the invoice for the month it ends in.
+
 The tags print on page 1 of the invoice, so a fixed-price tag can name the payment:
 `Lantern design (50% payment)`, then `Lantern design (100% payment)` for the next
 one. A fixed-price payment with no hours of its own takes `0` in Hours.
@@ -122,7 +127,7 @@ The usual ones:
 | Hours "-" is not a number | Hours must be a number. For a fixed-price payment with no hours, put `0`. |
 | unknown Project value | The project isn't in Active Projects in your Clients table. Add it, or fix the spelling. |
 | this line may already be billed | You pasted a row that's already in the ledger. Leave it out. If it really is new work, make its Task text different. |
-| week rate tag … spans two months | Split the booked week into two tags, one per month. |
+| week rate tag … was already billed | That week was invoiced before. If these are new days of an unfinished week, a week can only be billed once: paste a booked week once it's finished. |
 | as_at under [currency.SEK] is … | Update the SEK rate and its date for today. |
 | dated after the invoice date | A date typo, or an `invoice_date` in `config.txt` left over from last time. |
 | … already exists, but ledger.csv has no record of it | An earlier commit stopped partway, or the file was put there by hand. If it was never sent, delete it and run again. |
