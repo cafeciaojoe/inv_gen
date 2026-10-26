@@ -2,7 +2,7 @@ from datetime import date
 
 from conftest import TODAY
 
-LEDGER_TAIL = "," * 13  # the empty charge columns on a work row
+LEDGER_TAIL = "," * 14  # the empty charge and period columns on a work row
 
 
 def errors_of(folder, today=TODAY):
@@ -108,7 +108,7 @@ def test_week_tag_already_billed_even_with_other_capitals(folder):
     folder.append("ledger.csv",
                   "charge,INV-0002,2026-10-31,Bluegum Theatre Company,,,,,,PO BT-0001,"
                   "lantern build week — agreed 14 oct,week,1,3000.00,3000.00,AUD,1,2026-10-31,"
-                  "TEST,3000.00,base,domestic,0.00\n")
+                  "TEST,3000.00,base,domestic,0.00,\n")
     assert only_error(folder).startswith(
         'timesheet.txt — week rate tag "Lantern build week — agreed 14 Oct" '
         "was already billed, on INV-0002"
@@ -119,7 +119,7 @@ def test_week_tag_already_billed_found_on_ledger_work_rows(folder):
     folder.append("ledger.csv",
                   "work,INV-0002,2026-10-31,Bluegum Theatre Company,2026-10-20,8,Earlier build,"
                   "Stage Lantern,week rate,PO BT-0001,Lantern install week — agreed 14 Oct"
-                  + "," * 12 + "\n")
+                  + "," * 13 + "\n")
     assert only_error(folder).startswith(
         'timesheet.txt — week rate tag "Lantern install week — agreed 14 Oct" '
         "was already billed, on INV-0002"

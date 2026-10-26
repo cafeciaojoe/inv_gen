@@ -70,7 +70,8 @@ the numbering carries on from them.
    window also throws them away. Either way, the draft folder is deleted. Then press
    `r` to run again, or Enter to exit the script. After Enter, the window closes with
    one click, without Terminal asking to terminate anything.
-6. **Send the invoices** from `invoices/YYYY-MM/`.
+6. **Send the invoices** from `invoices/YYYY-MM/`, or the folder you set in
+   `config.txt` (see [What's in the folder](#whats-in-the-folder)).
 7. **Mark the rows as billed in Notion**, so they aren't pasted again next month.
    If the Terminal said some rows were **not sent**, paste `timesheet_not_sent.txt`
    back into Notion so they go out with a later invoice.
@@ -158,18 +159,27 @@ its work is dated after that date.
 | `config.txt` | you | Yes, in TextEdit. It's the one input not kept in Notion. |
 | `clients.txt`, `rates.txt`, `timesheet.txt` | pasted from Notion | No. Fix things in Notion and paste again. |
 | `ledger.csv` | the script | Only to add opening rows. Never change or delete a row. |
-| `summary.csv` | the script, on every commit | No. It's rebuilt from the ledger each time. |
 | `timesheet_not_sent.txt` | the script, when rows weren't sent | No. Paste it back into Notion. |
 | `rate cards/` | the script, on every commit | No. Send the one for the client's tier. |
-| `invoices/` | the script | No. |
+| `invoices/` | the script | No. Holds a folder per month and `summary.csv`. |
 
 `ledger.csv` is the only file that matters for your records: everything else can
 be rebuilt from it. Keep it backed up. The ATO wants five years.
 
-`summary.csv` is your monthly view: one row per invoice, sorted by the month the
-work was done, with the month it was invoiced, hours, the amount in each currency
-you invoiced in (AUD, SEK), everything added up in AUD, a total per month, and your
-rolling 12-month turnover. It opens in Numbers.
+The invoices go in `invoices/` beside the script, one folder per month. To keep
+them somewhere else, add this to `config.txt`, as its own section:
+
+```toml
+[paths]
+invoices = "~/Documents/Invoices"
+```
+
+`summary.csv`, at the top of that folder, is your overview. Each invoice is a row,
+grouped by month, with its hours and its amount split into hourly, daily, week
+rate and fixed price, all in AUD. Each month ends with a total, in separate
+columns so you can add up the invoice rows without counting it twice. At the
+bottom: the financial year to date, and the rolling 12 months that counts toward
+GST. It opens in Numbers.
 
 ## What the client sees
 
@@ -226,7 +236,7 @@ invoice line, added under the header row. Use your usual numbering
 (`INV-0003`) so new invoices carry on after the highest. For example:
 
 ```
-charge,INV-0003,2026-08-31,Bluegum Theatre Company,,,,,,PO BT-0001,Concept work August,hour,6,120.00,720.00,AUD,1,2026-08-31,,720.00,base,unregistered,
+charge,INV-0003,2026-08-31,Bluegum Theatre Company,,,,,,PO BT-0001,Concept work August,hour,6,120.00,720.00,AUD,1,2026-08-31,,720.00,base,unregistered,,2026-08
 ```
 
 The columns, in order, are in the header row. Leave the ones that don't apply

@@ -262,7 +262,18 @@ def test_unknown_setting_is_refused(folder):
 
 def test_old_paths_section_is_refused_with_a_reason(folder):
     folder.append("config.txt", '\n[paths]\npreview_folder = "~/invoice-preview"\n')
-    assert only_error(folder).startswith("config.txt — [paths] is no longer used")
+    assert only_error(folder).startswith("config.txt — preview_folder under [paths] is no "
+                                         "longer used")
+
+
+def test_invoices_folder_whose_parent_is_missing_is_refused(folder):
+    folder.append("config.txt", '\n[paths]\ninvoices = "/no/such/place/Invoices"\n')
+    assert only_error(folder).startswith('config.txt — invoices under [paths] is '
+                                         '"/no/such/place/Invoices", but /no/such/place')
+
+
+def test_invoices_folder_defaults_beside_the_script(folder):
+    assert folder.load()[0].config.invoices_dir == folder.path / "invoices"
 
 
 def test_hours_settings_can_flip(folder):
@@ -283,10 +294,10 @@ def test_every_bad_row_is_reported_in_one_run(folder):
 # ---- ledger.csv -------------------------------------------------------------
 
 WORK_ROW = ("work,INV-0003,2026-08-31,Bluegum Theatre Company,2026-08-20,2,Opening sketch,"
-            "Stage Lantern,,PO BT-0001" + "," * 13)
+            "Stage Lantern,,PO BT-0001" + "," * 14)
 CHARGE_ROW = ("charge,INV-0003,2026-08-31,Bluegum Theatre Company,,,,,,PO BT-0001,"
               "20 Aug — Opening sketch (hourly rate),hour,2,120.00,240.00,AUD,1,2026-08-31,"
-              "opening balance,240.00,base,domestic,0.00")
+              "opening balance,240.00,base,domestic,0.00,")
 
 
 def test_ledger_rows_are_read(folder):

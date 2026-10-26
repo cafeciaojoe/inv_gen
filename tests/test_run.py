@@ -9,7 +9,7 @@ from conftest import TODAY
 from make_invoices import EXIT_COMMITTED, EXIT_DISCARDED, EXIT_REFUSED, run
 
 LEDGER_CHARGE = ("charge,INV-0001,{day},Bluegum Theatre Company,,,,,,,Earlier work,fixed,1,"
-                 "{aud},{aud},AUD,1,{day},opening,{aud},base,unregistered,\n")
+                 "{aud},{aud},AUD,1,{day},opening,{aud},base,unregistered,,\n")
 
 
 def snapshot(path):

@@ -79,7 +79,7 @@ def test_commit_then_the_same_timesheet_again(setup):
     assert sorted(p.name for p in (setup.path / "invoices").rglob("*.pdf")) == [
         f"INV-000{n}.pdf" for n in range(1, 8)]
     assert len((setup.path / "ledger.csv").read_text().splitlines()) == 1 + 40
-    assert (setup.path / "summary.csv").read_text().startswith("work_month,client,")
+    assert (setup.path / "invoices" / "summary.csv").read_text().startswith("month,client,")
     assert not os.path.exists(setup.opened()[0])
 
     again = setup.run("commit\n")

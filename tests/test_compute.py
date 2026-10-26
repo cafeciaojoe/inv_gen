@@ -174,14 +174,14 @@ def test_gst_rounds_per_line(folder):
 def test_numbering_continues_from_the_ledger(folder):
     folder.append("ledger.csv",
                   "charge,INV-0041,2026-08-31,Bluegum Theatre Company,,,,,,,Opening balance,"
-                  "fixed,1,500.00,500.00,AUD,1,2026-08-31,opening,500.00,base,unregistered,\n")
+                  "fixed,1,500.00,500.00,AUD,1,2026-08-31,opening,500.00,base,unregistered,,\n")
     assert batch_of(folder).invoices[0].number == "INV-0042"
 
 
 def test_ledger_number_with_another_prefix_is_refused(folder):
     folder.append("ledger.csv",
                   "charge,2026-041,2026-08-31,Bluegum Theatre Company,,,,,,,Opening balance,"
-                  "fixed,1,500.00,500.00,AUD,1,2026-08-31,opening,500.00,base,unregistered,\n")
+                  "fixed,1,500.00,500.00,AUD,1,2026-08-31,opening,500.00,base,unregistered,,\n")
     _, errors = folder.check()
     assert errors == ['ledger.csv — invoice number "2026-041" is not number_prefix "INV-" '
                       "followed by digits"]

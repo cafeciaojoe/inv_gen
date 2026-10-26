@@ -65,6 +65,7 @@ LEDGER_COLUMNS = [
     "unit", "qty", "rate", "amount", "currency",
     "fx_rate", "fx_date", "fx_source", "amount_aud",
     "tier", "gst_treatment", "gst_amount",
+    "period",  # the month an invoice covers, YYYY-MM; its rows may be from others
 ]
 
 
@@ -298,6 +299,9 @@ class Config:
     payment_note: str
     # Which rows' hours the invoice's work log shows; hourly rows always do.
     show_hours: dict[str, bool]  # billing type -> shown
+    # Where the month folders of PDFs and summary.csv go: [paths] invoices, or
+    # an invoices folder beside the script when that isn't set.
+    invoices_dir: Path
 
 
 _KINDS = {
@@ -321,6 +325,7 @@ SETTINGS = {
     "invoicing": {"invoice_date", "number_prefix", "number_padding", "payment_terms_days",
                   "show_fixed_price_hours", "show_week_rate_hours"},
     "payment": {"note"},
+    "paths": {"invoices"},
 }
 CURRENCY_SETTINGS = {"rate", "as_at"}  # in each [currency.<CODE>]
 PAYMENT_SETTINGS = {"account_name", "bsb", "account_number", "iban", "swift_bic",
@@ -340,11 +345,14 @@ def check_settings(raw: dict, errors: list[str]) -> None:
         else:
             errors.append(f"config.txt — {key} {where} is not a setting the script knows")
 
+    paths = raw.get("paths")
+    if isinstance(paths, dict) and "preview_folder" in paths:
+        errors.append("config.txt — preview_folder under [paths] is no longer used: drafts go "
+                      "to a fresh temporary folder. Delete that line.")
+        paths = {k: v for k, v in paths.items() if k != "preview_folder"}
+        raw = {**raw, "paths": paths}
     for name, value in raw.items():
-        if name == "paths":
-            errors.append("config.txt — [paths] is no longer used: drafts go to a fresh "
-                          "temporary folder. Delete the [paths] section.")
-        elif name not in SETTINGS:
+        if name not in SETTINGS:
             if isinstance(value, dict):
                 errors.append(f"config.txt — [{name}] is not a section the script knows")
             else:
@@ -432,6 +440,17 @@ def load_config(base: Path, today: date, errors: list[str]) -> Config | None:
     show_fixed = setting("invoicing", "show_fixed_price_hours", "true or false", required=False)
     show_week = setting("invoicing", "show_week_rate_hours", "true or false", required=False)
 
+    # ~ is expanded and a relative path is taken from this folder. The folder
+    # itself is created when needed, but its parent has to exist, so a typo
+    # is refused instead of quietly making folders somewhere unexpected.
+    folder = setting("paths", "invoices", "text", required=False)
+    invoices_dir = base / "invoices"
+    if folder is not None:
+        invoices_dir = (base / Path(folder).expanduser()).resolve()
+        if not invoices_dir.parent.is_dir():
+            errors.append(f'config.txt — invoices under [paths] is "{folder}", but '
+                          f"{invoices_dir.parent} doesn't exist. Check the path.")
+
     payment = raw.get("payment", {})
     if not isinstance(payment, dict):
         payment = {}
@@ -458,6 +477,7 @@ def load_config(base: Path, today: date, errors: list[str]) -> Config | None:
         show_hours={"": True,
                     "week rate": True if show_week is None else show_week,
                     "fixed price": False if show_fixed is None else show_fixed},
+        invoices_dir=invoices_dir,
     )
 
 
@@ -784,6 +804,7 @@ class LedgerCharge:
     amount_aud: Decimal
     currency: str
     amount: Decimal  # in `currency`, as invoiced
+    period: str  # YYYY-MM; may be empty on an opening row entered by hand
 
 
 @dataclass(frozen=True)
@@ -826,7 +847,8 @@ def parse_ledger(raw: bytes, errors: list[str]) -> Ledger:
                                             date.fromisoformat(row["invoice_date"]),
                                             row["client"], row["unit"], row["description"],
                                             Decimal(row["amount_aud"]),
-                                            row["currency"].upper(), Decimal(row["amount"])))
+                                            row["currency"].upper(), Decimal(row["amount"]),
+                                            row["period"]))
             else:
                 errors.append(f'ledger.csv — line {line}: row_type "{row["row_type"]}" '
                               f"is not work or charge")
@@ -1642,17 +1664,18 @@ def ledger_rows(batch: Batch, config: Config) -> list[list[str]]:
     def row(**cells: str) -> list[str]:
         return [cells.get(column, "") for column in LEDGER_COLUMNS]
 
-    def work(e: Entry, client: Client, number: str) -> list[str]:
+    def work(e: Entry, client: Client, number: str, period: str) -> list[str]:
         return row(row_type="work", invoice_no=number, invoice_date=issued, client=client.name,
                    date=e.date.isoformat(), hours=fmt_hours(e.hours), task=e.task,
                    project=e.project, billing_type=e.billing, ref=client.reference,
-                   description=e.tag)
+                   description=e.tag, period=period)
 
     rows = []
     for inv in batch.invoices:
         home = inv.client.currency == config.home_currency
-        rows += [work(e, inv.client, inv.number) for e in inv.entries]
-        rows += [row(row_type="charge", invoice_no=inv.number, invoice_date=issued,
+        period = f"{inv.month:%Y-%m}"
+        rows += [work(e, inv.client, inv.number, period) for e in inv.entries]
+        rows += [row(row_type="charge", invoice_no=inv.number, invoice_date=issued, period=period,
                      client=inv.client.name, ref=inv.client.reference,
                      description=l.description, unit=l.unit, qty=fmt_hours(l.qty),
                      rate=f"{l.rate:.2f}", amount=f"{l.amount:.2f}",
@@ -1665,61 +1688,78 @@ def ledger_rows(batch: Batch, config: Config) -> list[list[str]]:
     return rows
 
 
-def summary_rows(ledger: Ledger, end: date, home: str) -> list[list[str]]:
-    """summary.csv: one row per invoice, by the month the work was done.
+# The summary's billing-type columns, by charge unit.
+SUMMARY_TYPES = (("hour", "hourly"), ("day", "daily"), ("week", "week rate"),
+                 ("fixed", "fixed price"))
 
-    Each currency invoiced in gets a column of the amounts as invoiced, home
-    currency first, and total_aud adds everything up in AUD. Each invoice
-    covers one month of work, so its work rows give the month. An opening row
-    entered by hand without work rows goes under the month it was invoiced.
+
+def financial_year_start(d: date) -> date:
+    """1 July of the Australian financial year `d` falls in."""
+    return date(d.year if d.month >= 7 else d.year - 1, 7, 1)
+
+
+def summary_rows(ledger: Ledger, end: date) -> list[list[str]]:
+    """summary.csv: every invoice, grouped by the month it covers, all in AUD.
+
+    Each invoice row has its hours (every hour on it, charged or not) and its
+    amount split by billing type. Each month ends with a Total row whose figures
+    sit in their own "month" columns, so summing a column of invoice figures
+    never counts a total twice; a blank row separates the months. Last come
+    the financial year to date and the rolling 12 months that count toward
+    GST registration, both as of `end`, the run's invoice date.
     """
-    work: dict[str, list[LedgerWork]] = {}
+    hours: dict[str, Decimal] = {}
     for w in ledger.work:
-        work.setdefault(w.invoice_no, []).append(w)
+        if w.invoice_no:
+            hours[w.invoice_no] = hours.get(w.invoice_no, Decimal(0)) + w.hours
     charges: dict[str, list[LedgerCharge]] = {}
     for c in ledger.charges:
         charges.setdefault(c.invoice_no, []).append(c)
-    currencies = sorted({c.currency for c in ledger.charges}, key=lambda cur: (cur != home, cur))
 
-    rows = []  # work month, client, invoice, invoiced, hours, {currency: amount}, total_aud
-    for number in sorted((set(work) | set(charges)) - {""}):
-        ws, cs = work.get(number, []), charges.get(number, [])
-        month = min(w.date for w in ws) if ws else cs[0].invoice_date
-        invoiced: dict[str, Decimal] = {}
+    invoices = []  # (month, client, number, invoiced, hours, {unit: aud}, total)
+    for number, cs in charges.items():
+        month = cs[0].period or f"{cs[0].invoice_date:%Y-%m}"  # an opening row may lack one
+        by_type: dict[str, Decimal] = {}
         for c in cs:
-            invoiced[c.currency] = invoiced.get(c.currency, Decimal(0)) + c.amount
-        rows.append((f"{month:%Y-%m}", (cs or ws)[0].client, number,
-                     f"{cs[0].invoice_date:%Y-%m}" if cs else "",
-                     sum((w.hours for w in ws), Decimal(0)), invoiced,
-                     sum((c.amount_aud for c in cs), Decimal(0))))
-    logged: dict[tuple[str, str], Decimal] = {}
-    for w in work.get("", []):
-        key = (f"{w.date:%Y-%m}", w.client)
-        logged[key] = logged.get(key, Decimal(0)) + w.hours
-    rows += [(month, client, "", "", hours, {}, Decimal(0))
-             for (month, client), hours in logged.items()]
-    rows.sort(key=lambda r: (r[0], r[2] or "~", r[1]))  # no-invoice rows last in a month
+            by_type[c.unit] = by_type.get(c.unit, Decimal(0)) + c.amount_aud
+        invoices.append((month, cs[0].client, number, f"{cs[0].invoice_date:%Y-%m}",
+                         hours.get(number, Decimal(0)), by_type,
+                         sum((c.amount_aud for c in cs), Decimal(0))))
+    invoices.sort(key=lambda r: (r[0], r[2]))
 
-    def amounts(invoiced: dict[str, Decimal]) -> list[str]:
-        # Blank, not 0.00, where nothing was invoiced in that currency.
-        return [f"{invoiced[cur]:.2f}" if cur in invoiced else "" for cur in currencies]
+    def money(d: Decimal | None) -> str:
+        return "" if not d else f"{d:.2f}"  # blank, not 0.00, where there is none
 
-    out = [["work_month", "client", "invoice", "invoiced", "hours", *currencies, "total_aud"]]
-    for month in sorted({r[0] for r in rows}):
-        group = [r for r in rows if r[0] == month]
-        out += [[m, client, number, when, fmt_hours(hours), *amounts(invoiced), f"{aud:.2f}"]
-                for m, client, number, when, hours, invoiced, aud in group]
-        month_invoiced: dict[str, Decimal] = {}
+    def figures(hrs: Decimal, by_type: dict[str, Decimal], total: Decimal) -> list[str]:
+        return [fmt_hours(hrs), *(money(by_type.get(unit)) for unit, _ in SUMMARY_TYPES),
+                f"{total:.2f}"]
+
+    names = [name for _, name in SUMMARY_TYPES]
+    figure_columns = len(names) + 2  # hours, one per type, total
+    out = [["month", "client", "invoice", "invoiced", "hours", *names, "total",
+            "month hours", *(f"month {n}" for n in names), "month total"]]
+    for month in sorted({r[0] for r in invoices}):
+        group = [r for r in invoices if r[0] == month]
+        out += [[m, client, number, invoiced, *figures(hrs, by_type, total),
+                 *[""] * figure_columns]
+                for m, client, number, invoiced, hrs, by_type, total in group]
+        month_types: dict[str, Decimal] = {}
         for r in group:
-            for cur, amount in r[5].items():
-                month_invoiced[cur] = month_invoiced.get(cur, Decimal(0)) + amount
-        out.append([month, "Total", "", "",
-                    fmt_hours(sum((r[4] for r in group), Decimal(0))),
-                    *amounts(month_invoiced),
-                    f"{sum((r[6] for r in group), Decimal(0)):.2f}"])
-    out.append([])
-    out.append(["", f"Turnover, 12 months to {end.isoformat()}", "", "", "",
-                *[""] * len(currencies), f"{rolling_turnover(ledger, None, end):.2f}"])
+            for unit, amount in r[5].items():
+                month_types[unit] = month_types.get(unit, Decimal(0)) + amount
+        out.append([month, "Total", "", "", *[""] * figure_columns,
+                    *figures(sum((r[4] for r in group), Decimal(0)), month_types,
+                             sum((r[6] for r in group), Decimal(0)))])
+        out.append([])
+
+    fy = financial_year_start(end)
+    fy_total = sum((r[6] for r in invoices if f"{fy:%Y-%m}" <= r[0] <= f"{end:%Y-%m}"),
+                   Decimal(0))
+    blank = [""] * (len(out[0]) - 2)
+    out.append([f"Financial year {fy.year}–{(fy.year + 1) % 100:02d} to date", *blank,
+                f"{fy_total:.2f}"])
+    out.append([f"Rolling 12 months to {end.isoformat()} (GST turnover)", *blank,
+                f"{rolling_turnover(ledger, None, end):.2f}"])
     return out
 
 
@@ -1740,8 +1780,7 @@ def appended_ledger(inputs: Inputs, batch: Batch) -> tuple[bytes, list[list[str]
 def summary_after(inputs: Inputs, batch: Batch) -> bytes:
     """summary.csv as it will be after this commit, built for the preview."""
     new_ledger, _ = appended_ledger(inputs, batch)
-    rows = summary_rows(parse_ledger(new_ledger, []), inputs.config.invoice_date,
-                        inputs.config.home_currency)
+    rows = summary_rows(parse_ledger(new_ledger, []), inputs.config.invoice_date)
     return csv_text(rows).encode("utf-8")
 
 
@@ -1757,7 +1796,17 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes,
     """
     config = inputs.config
     ledger_path = base / "ledger.csv"
-    targets = {inv.number: base / "invoices" / f"{inv.month:%Y-%m}" / f"{inv.number}.pdf"
+    folder_of_invoices = config.invoices_dir
+    summary_path = folder_of_invoices / "summary.csv"
+
+    def shown(path: Path) -> str:
+        """A path as the person reads it: from the invoicing folder when inside it."""
+        try:
+            return str(path.relative_to(base))
+        except ValueError:
+            return str(path)
+
+    targets = {inv.number: folder_of_invoices / f"{inv.month:%Y-%m}" / f"{inv.number}.pdf"
                for inv in batch.invoices}
 
     problems = []
@@ -1765,7 +1814,7 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes,
         if path.exists():
             # Numbers continue from the ledger, so a file here means an earlier
             # commit stopped partway or the file was put there by hand.
-            problems.append(f"{path.relative_to(base)} — already exists, but ledger.csv has no "
+            problems.append(f"{shown(path)} — already exists, but ledger.csv has no "
                             "record of it. If it was never sent, delete it and run again.")
     current = ledger_path.read_bytes() if ledger_path.exists() else None
     if current != inputs.ledger.raw:
@@ -1788,15 +1837,17 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes,
     made: list[Path] = []
     staged_summary = staged_not_sent = None
     try:
-        staged_summary = stage(base / "summary.csv", summary)
+        if not folder_of_invoices.exists():
+            folder_of_invoices.mkdir()
+            made.append(folder_of_invoices)
+        staged_summary = stage(summary_path, summary)
         if not_sent is not None:
             staged_not_sent = stage(base / NOT_SENT, not_sent)
         for inv in batch.invoices:
             path = targets[inv.number]
-            for folder in (base / "invoices", path.parent):
-                if not folder.exists():
-                    folder.mkdir()
-                    made.append(folder)
+            if not path.parent.exists():
+                path.parent.mkdir()
+                made.append(path.parent)
             with open(path, "xb") as f:
                 written.append(path)
                 f.write(pdfs[inv.number])
@@ -1805,18 +1856,18 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes,
     except BaseException:
         for path in written:
             path.unlink(missing_ok=True)
-        for folder in reversed(made):
-            folder.rmdir()
         for staged in (staged_summary, staged_not_sent):
             if staged is not None:
                 staged.unlink(missing_ok=True)
+        for folder in reversed(made):  # empty now, so this can't remove anything else
+            folder.rmdir()
         print("\nThe commit did not finish. The files it had written were removed and "
               "ledger.csv is unchanged.", file=sys.stderr)
         raise
 
     if written:
         print(f"\nCommitted {len(written)} invoice{'s' if len(written) != 1 else ''}:")
-        print("\n".join(f"  {path.relative_to(base)}" for path in written))
+        print("\n".join(f"  {shown(path)}" for path in written))
         print(f"ledger.csv: {len(rows)} rows added.")
     else:
         print("\nNo invoices this run.")
@@ -1825,8 +1876,8 @@ def commit(base: Path, inputs: Inputs, batch: Batch, summary: bytes,
     # left is one rename. It is derived from the ledger, so even if that fails
     # nothing is lost: the next commit rebuilds it.
     try:
-        os.replace(staged_summary, base / "summary.csv")
-        print("summary.csv: replaced with the one in the preview.")
+        os.replace(staged_summary, summary_path)
+        print(f"{shown(summary_path)}: replaced with the one in the preview.")
     except OSError as exc:
         staged_summary.unlink(missing_ok=True)
         print(f"summary.csv could not be replaced ({exc}). The invoices and ledger.csv are "

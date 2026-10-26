@@ -39,7 +39,7 @@ def pdfs_on_disk(folder):
     if not root.exists():
         return {}
     return {str(d.relative_to(folder.path)): sorted(p.name for p in d.iterdir())
-            for d in sorted(root.iterdir())}
+            for d in sorted(root.iterdir()) if d.is_dir()}
 
 
 # ---- A clean commit ---------------------------------------------------------
@@ -113,31 +113,47 @@ def test_gst_columns_once_registered(folder):
 
 def test_summary_csv(folder):
     commit_run(folder)
-    assert (folder.path / "summary.csv").read_text() == (
-        "work_month,client,invoice,invoiced,hours,AUD,SEK,total_aud\n"
-        "2026-09,Bluegum Theatre Company,INV-0001,2027-01,3.25,390.00,,390.00\n"
-        "2026-09,Tidewater Labs,INV-0002,2027-01,9.25,712.50,,712.50\n"
-        "2026-09,Total,,,12.5,1102.50,,1102.50\n"
-        "2026-11,Bluegum Theatre Company,INV-0003,2027-01,94.75,7850.00,,7850.00\n"
-        "2026-11,Fjordlight AB,INV-0004,2027-01,12.75,,9448.29,1370.00\n"
-        "2026-11,Northside Makers Trust,INV-0005,2027-01,14.5,1800.00,,1800.00\n"
-        "2026-11,Tidewater Labs,INV-0006,2027-01,2,180.00,,180.00\n"
-        "2026-11,Total,,,124,9830.00,9448.29,11200.00\n"
-        "2026-12,Northside Makers Trust,INV-0007,2027-01,11.25,2000.00,,2000.00\n"
-        "2026-12,Total,,,11.25,2000.00,,2000.00\n"
+    assert (folder.path / "invoices" / "summary.csv").read_text() == (
+        "month,client,invoice,invoiced,hours,hourly,daily,week rate,fixed price,total,"
+        "month hours,month hourly,month daily,month week rate,month fixed price,month total\n"
+        "2026-09,Bluegum Theatre Company,INV-0001,2027-01,3.25,390.00,,,,390.00,,,,,,\n"
+        "2026-09,Tidewater Labs,INV-0002,2027-01,9.25,112.50,600.00,,,712.50,,,,,,\n"
+        "2026-09,Total,,,,,,,,,12.5,502.50,600.00,,,1102.50\n"
         "\n"
-        ',"Turnover, 12 months to 2027-01-11",,,,,,14302.50\n'
+        "2026-11,Bluegum Theatre Company,INV-0003,2027-01,94.75,1050.00,800.00,6000.00,,7850.00,,,,,,\n"
+        "2026-11,Fjordlight AB,INV-0004,2027-01,12.75,570.00,800.00,,,1370.00,,,,,,\n"
+        "2026-11,Northside Makers Trust,INV-0005,2027-01,14.5,300.00,,,1500.00,1800.00,,,,,,\n"
+        "2026-11,Tidewater Labs,INV-0006,2027-01,2,180.00,,,,180.00,,,,,,\n"
+        "2026-11,Total,,,,,,,,,124,2100.00,1600.00,6000.00,1500.00,11200.00\n"
+        "\n"
+        "2026-12,Northside Makers Trust,INV-0007,2027-01,11.25,,,,2000.00,2000.00,,,,,,\n"
+        "2026-12,Total,,,,,,,,,11.25,,,,2000.00,2000.00\n"
+        "\n"
+        "Financial year 2026\u201327 to date,,,,,,,,,,,,,,,14302.50\n"
+        "Rolling 12 months to 2027-01-11 (GST turnover),,,,,,,,,,,,,,,14302.50\n"
     )
 
 
-def test_summary_has_a_column_only_for_currencies_invoiced(folder):
-    text = (folder.path / "timesheet.txt").read_text()
-    kept = [line for line in text.splitlines() if "Aurora Lamp" not in line]
-    (folder.path / "timesheet.txt").write_text("\n".join(kept) + "\n")
+def test_financial_year_leaves_out_last_years_months(folder):
+    # An opening invoice for June 2026 is last financial year, but still within
+    # the rolling 12 months that count toward GST.
+    folder.append("ledger.csv",
+                  "charge,INV-000,2026-06-30,Bluegum Theatre Company,,,,,,,Opening invoice,"
+                  "fixed,1,1000.00,1000.00,AUD,1,2026-06-30,,1000.00,base,unregistered,,2026-06\n")
     commit_run(folder)
-    summary = (folder.path / "summary.csv").read_text().splitlines()
-    assert summary[0] == "work_month,client,invoice,invoiced,hours,AUD,total_aud"
-    assert summary[-1] == ',"Turnover, 12 months to 2027-01-11",,,,,12932.50'
+    lines = (folder.path / "invoices" / "summary.csv").read_text().splitlines()
+    assert lines[1].startswith("2026-06,Bluegum Theatre Company,INV-000,2026-06,0,")
+    assert lines[-2].endswith(",14302.50") and lines[-1].endswith(",15302.50")
+
+
+def test_invoices_and_summary_go_to_the_configured_folder(folder, tmp_path):
+    target = tmp_path / "elsewhere" / "Invoices"
+    (tmp_path / "elsewhere").mkdir()
+    folder.edit("config.txt", "[invoicing]\n", f'[paths]\ninvoices = "{target}"\n\n[invoicing]\n')
+    assert commit_run(folder) == EXIT_COMMITTED
+    assert (target / "2026-11" / "INV-0003.pdf").exists()
+    assert (target / "summary.csv").read_text().startswith("month,client,")
+    assert not (folder.path / "invoices").exists()
 
 
 def test_commit_prints_what_it_kept(folder, capsys):
@@ -145,26 +161,26 @@ def test_commit_prints_what_it_kept(folder, capsys):
     out = capsys.readouterr().out
     assert "Committed 7 invoices:\n  invoices/2026-09/INV-0001.pdf\n" in out
     assert out.endswith("ledger.csv: 40 rows added.\n"
-                        "summary.csv: replaced with the one in the preview.\n"
+                        "invoices/summary.csv: replaced with the one in the preview.\n"
                         "rate cards/: 3 rate cards, dated today.\n")
 
 
 def test_committed_summary_is_the_one_in_the_preview(folder):
     preview = {}
     commit_run(folder, preview=preview)
-    assert preview["summary.csv"] == (folder.path / "summary.csv").read_bytes()
+    assert preview["summary.csv"] == (folder.path / "invoices" / "summary.csv").read_bytes()
 
 
 def test_discarding_leaves_the_old_summary(folder):
     commit_run(folder)
-    before = (folder.path / "summary.csv").read_bytes()
+    before = (folder.path / "invoices" / "summary.csv").read_bytes()
     header = (folder.path / "timesheet.txt").read_text().splitlines()[:2]
     (folder.path / "timesheet.txt").write_text("\n".join(header + [
         "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |  |"]) + "\n")
     preview = {}
     commit_run(folder, answer="no", preview=preview)
     assert preview["summary.csv"] != before  # the preview showed the would-be summary
-    assert (folder.path / "summary.csv").read_bytes() == before
+    assert (folder.path / "invoices" / "summary.csv").read_bytes() == before
 
 
 # ---- The ledger is append-only ----------------------------------------------
@@ -179,7 +195,7 @@ def test_first_run_creates_the_ledger(folder):
 
 def test_existing_rows_are_kept_byte_for_byte(folder):
     opening = ("work,INV-0003,2026-08-31,Bluegum Theatre Company,2026-08-20,2,Opening sketch,"
-               "Stage Lantern,,PO BT-0001" + "," * 13)  # hand-entered, no final newline
+               "Stage Lantern,,PO BT-0001" + "," * 14)  # hand-entered, no final newline
     folder.append("ledger.csv", opening)
     before = (folder.path / "ledger.csv").read_bytes()
     commit_run(folder)
@@ -206,8 +222,8 @@ def test_next_month_continues_the_numbering(folder):
         "| December 10, 2026 | 2 | Clock hands | Tide Clock |  |  |  |"]) + "\n")
     assert commit_run(folder) == EXIT_COMMITTED
     assert pdfs_on_disk(folder)["invoices/2026-12"] == ["INV-0007.pdf", "INV-0008.pdf"]
-    summary = (folder.path / "summary.csv").read_text()
-    assert "2026-12,Tidewater Labs,INV-0008,2027-01,2,180.00,,180.00\n" in summary
+    summary = (folder.path / "invoices" / "summary.csv").read_text()
+    assert "2026-12,Tidewater Labs,INV-0008,2027-01,2,180.00,,,,180.00,,,,,,\n" in summary
 
 
 # ---- Refused before anything is written -------------------------------------
@@ -287,7 +303,7 @@ def test_a_month_with_nothing_charged_is_recorded_under_the_clients_invoice(fold
     assert [r["invoice_no"] for r in rows] == ["INV-0005", "INV-0005"]
     assert not [r for r in ledger(folder) if r["row_type"] == "work" and not r["invoice_no"]]
     assert "2026-11,Northside Makers Trust,INV-0005,2027-01,25.75," in (
-        folder.path / "summary.csv").read_text()
+        folder.path / "invoices" / "summary.csv").read_text()
 
 
 def test_rows_not_sent_are_written_back_for_notion(folder, capsys):
