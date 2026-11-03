@@ -63,9 +63,10 @@ If you have invoices from before the script, enter them as opening rows first
 3. **Double-click `Make invoices.command`.** A Terminal window opens and checks
    everything.
 4. **Read what it shows you.** Finder opens a folder with the draft invoices and
-   the new `summary.csv`. Terminal shows each invoice's total, any booked weeks
-   that ran long or short, fixed-price hours that charged nothing (check no
-   balance was forgotten), and your turnover against the GST threshold.
+   the new `summary.csv`. Terminal shows each invoice's total, sent invoices
+   that are overdue, any booked weeks that ran long or short, fixed-price hours
+   that charged nothing (check no balance was forgotten), and your turnover
+   against the GST threshold.
 5. **Type `commit`** to keep them, or anything else to throw them away. Closing the
    window also throws them away. Either way, the draft folder is deleted. Then press
    `r` to run again, or Enter to exit the script. After Enter, the window closes with
@@ -73,6 +74,9 @@ If you have invoices from before the script, enter them as opening rows first
 6. **Send the invoices** from `invoices/YYYY-MM/`, or the folder you set in
    `config.txt` (see [What's in the folder](#whats-in-the-folder)).
 7. **Mark the rows as billed in Notion**, so they aren't pasted again next month.
+
+When a client pays, type the date into that invoice's `paid on` column in
+`summary.csv` (see below).
    If the Terminal said some rows were **not sent**, paste `timesheet_not_sent.txt`
    back into Notion so they go out with a later invoice.
    If they are, the script refuses them as duplicates anyway.
@@ -137,6 +141,8 @@ The usual ones:
 | as_at under [currency.SEK] is … | Update the SEK rate and its date for today. |
 | dated after the invoice date | A date typo, or an `invoice_date` in `config.txt` left over from last time. |
 | … already exists, but ledger.csv has no record of it | An earlier commit stopped partway, or the file was put there by hand. If it was never sent, delete it and run again. |
+| paid on … isn't a date like 2026-11-12 | Retype it in `summary.csv` as year-month-day. Some editors reformat dates; turn that off, or type it as text. |
+| summary.csv — changed while the drafts were open | You saved `summary.csv` during the run. Nothing was written. Run again: your change is kept. |
 
 ### Dating invoices on another day
 
@@ -161,10 +167,12 @@ its work is dated after that date.
 | `timesheet_not_sent.txt` | the script, when rows weren't sent | No. Paste it back into Notion. |
 | `rate cards/` | the script, on every commit | No. Send the one for the client's tier. |
 | `invoices/` | the script | No. Holds a folder per month, `summary.csv` and `ledger.csv`. |
+| `invoices/summary.csv` | the script, on every commit | Only the `paid on` column. |
 | `invoices/ledger.csv` | the script | Only to add opening rows. Never change or delete a row. |
 
-`ledger.csv` is the only file that matters for your records: everything else can
-be rebuilt from it. Keep it backed up. The ATO wants five years.
+`ledger.csv` is your record of what was invoiced, and `summary.csv` holds the
+dates you were paid. Everything else can be rebuilt from those two. Keep them
+backed up. The ATO wants five years.
 
 The invoices go in `invoices/` beside the script, one folder per month, with
 `summary.csv` and `ledger.csv` beside them. To keep them somewhere else, such as
@@ -180,12 +188,35 @@ preview ends by saying where commit will save. A `ledger.csv` left beside the
 script is refused, so move it into the invoices folder. A folder with no
 `ledger.csv` starts the numbering again from 001, and the preview says so.
 
-`summary.csv`, at the top of that folder, is your overview. Each invoice is a row,
-grouped by month, with its hours and its amount split into hourly, daily, week
-rate and fixed price, all in AUD. Each month ends with a total, in separate
-columns so you can add up the invoice rows without counting it twice. At the
-bottom: the financial year to date, and the rolling 12 months that counts toward
-GST. It opens in Numbers.
+`summary.csv`, at the top of that folder, is your overview, all in AUD. Each
+invoice is a row, grouped by the month it covers, with:
+
+- `paid on`, the day the client paid, which you type in;
+- its hours, and its amount before GST split into hourly, daily, week rate and
+  fixed price, then the `invoice total`;
+- its `GST`, all of which goes to the ATO with your BAS;
+- `tax set aside` and `super`: what to move out of it once paid, worked out from
+  the invoice total at the shares set by `tax_set_aside` and `super_rate` under
+  `[tax]` in `config.txt`.
+
+Because each invoice has its own figures, a late payment can be handled on its
+own when it arrives. Each month ends with a Total row adding up the same
+columns, then a blank line. At the bottom: the financial year to date, and the
+rolling 12 months that counts toward GST. The summary is for reading: the
+totals share columns with the invoices, so adding up a whole column in an editor
+counts them twice.
+
+**Marking an invoice paid.** Open `summary.csv` in an editor that saves CSV as
+it is, such as Modern CSV, rather than Numbers: Numbers saves a separate
+`.numbers` file and leaves the CSV unchanged. Type the date as `2026-11-12` in
+the invoice's `paid on` cell and save. Each commit rebuilds `summary.csv` from
+the ledger and carries those dates over, matched by invoice number. Anything
+else you type in it is not kept. Save and close it before running the script:
+a summary changed while the drafts are open stops the commit, so nothing you
+typed is lost. A date that isn't written like `2026-11-12`, falls before the
+invoice was issued or after today, or is on a row with no invoice number stops
+the run and names the line. An invoice past its payment terms with no `paid on`
+date is listed as overdue in every run.
 
 ## What the client sees
 

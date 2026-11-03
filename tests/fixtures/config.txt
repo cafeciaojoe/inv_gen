@@ -36,6 +36,12 @@ abn = "00 000 000 000"
 turnover_threshold = 75000
 turnover_warn_at = 0.8
 
+# What to put aside from each invoice, as a share of its amount before GST.
+# summary.csv shows both for every invoice. GST is shown on its own: put all
+# of it aside for the BAS. Ask your accountant what share suits you.
+tax_set_aside = 0.30
+super_rate = 0.10
+
 
 [currency]
 home = "AUD"
