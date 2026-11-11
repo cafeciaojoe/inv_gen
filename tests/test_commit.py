@@ -117,23 +117,23 @@ def test_summary_csv(folder):
     commit_run(folder)
     assert (folder.path / "invoices" / "summary.csv").read_text() == (
         "month,client,invoice,invoiced,paid on,hours,hourly,daily,week rate,fixed price,"
-        "invoice total,GST,tax set aside,super\n"
-        "2026-09,Bluegum Theatre Company,INV-0001,2027-01,,3.25,390.00,,,,390.00,,117.00,39.00\n"
-        "2026-09,Tidewater Labs,INV-0002,2027-01,,9.25,112.50,600.00,,,712.50,,213.75,71.25\n"
-        "2026-09,Total,,,,12.5,502.50,600.00,,,1102.50,,330.75,110.25\n"
+        "invoice total,GST,tax set aside,super,set aside\n"
+        "2026-09,Bluegum Theatre Company,INV-0001,2027-01,,3.25,390.00,,,,390.00,,117.00,39.00,\n"
+        "2026-09,Tidewater Labs,INV-0002,2027-01,,9.25,112.50,600.00,,,712.50,,213.75,71.25,\n"
+        "2026-09,Total,,,,12.5,502.50,600.00,,,1102.50,,330.75,110.25,\n"
         "\n"
-        "2026-11,Bluegum Theatre Company,INV-0003,2027-01,,94.75,1050.00,800.00,6000.00,,7850.00,,2355.00,785.00\n"
-        "2026-11,Fjordlight AB,INV-0004,2027-01,,12.75,570.00,800.00,,,1370.00,,411.00,137.00\n"
-        "2026-11,Northside Makers Trust,INV-0005,2027-01,,14.5,300.00,,,1500.00,1800.00,,540.00,180.00\n"
-        "2026-11,Tidewater Labs,INV-0006,2027-01,,2,180.00,,,,180.00,,54.00,18.00\n"
-        "2026-11,Total,,,,124,2100.00,1600.00,6000.00,1500.00,11200.00,,3360.00,1120.00\n"
+        "2026-11,Bluegum Theatre Company,INV-0003,2027-01,,94.75,1050.00,800.00,6000.00,,7850.00,,2355.00,785.00,\n"
+        "2026-11,Fjordlight AB,INV-0004,2027-01,,12.75,570.00,800.00,,,1370.00,,411.00,137.00,\n"
+        "2026-11,Northside Makers Trust,INV-0005,2027-01,,14.5,300.00,,,1500.00,1800.00,,540.00,180.00,\n"
+        "2026-11,Tidewater Labs,INV-0006,2027-01,,2,180.00,,,,180.00,,54.00,18.00,\n"
+        "2026-11,Total,,,,124,2100.00,1600.00,6000.00,1500.00,11200.00,,3360.00,1120.00,\n"
         "\n"
-        "2026-12,Northside Makers Trust,INV-0007,2027-01,,11.25,,,,2000.00,2000.00,,600.00,200.00\n"
-        "2026-12,Total,,,,11.25,,,,2000.00,2000.00,,600.00,200.00\n"
+        "2026-12,Northside Makers Trust,INV-0007,2027-01,,11.25,,,,2000.00,2000.00,,600.00,200.00,\n"
+        "2026-12,Total,,,,11.25,,,,2000.00,2000.00,,600.00,200.00,\n"
         "\n"
         "Financial year 2026\u201327 to date,,,,,147.75,2602.50,2200.00,6000.00,3500.00,14302.50,,"
-        "4290.75,1430.25\n"
-        "Rolling 12 months to 2027-01-11 (GST turnover),,,,,,,,,,14302.50,,,\n"
+        "4290.75,1430.25,\n"
+        "Rolling 12 months to 2027-01-11 (GST turnover),,,,,,,,,,14302.50,,,,\n"
     )
 
 
@@ -256,7 +256,7 @@ def test_next_month_continues_the_numbering(folder):
     assert commit_run(folder) == EXIT_COMMITTED
     assert pdfs_on_disk(folder)["invoices/2026-12"] == ["INV-0007.pdf", "INV-0008.pdf"]
     summary = (folder.path / "invoices" / "summary.csv").read_text()
-    assert "2026-12,Tidewater Labs,INV-0008,2027-01,,2,180.00,,,,180.00,,54.00,18.00\n" in summary
+    assert "2026-12,Tidewater Labs,INV-0008,2027-01,,2,180.00,,,,180.00,,54.00,18.00,\n" in summary
 
 
 # ---- Refused before anything is written -------------------------------------

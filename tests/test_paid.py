@@ -1,4 +1,5 @@
-"""Paid on dates typed into summary.csv: carried over, checked, and used."""
+"""What you type into summary.csv, paid on dates and set aside notes: carried over,
+checked, and used."""
 
 import csv
 from datetime import date
@@ -18,12 +19,12 @@ def committed_then_cleared(folder):
     (folder.path / "timesheet.txt").write_text("\n".join(header) + "\n")
 
 
-def mark_paid(folder, marks, *, extra_rows=(), encoding="utf-8"):
-    """Type paid on dates into summary.csv, keyed by invoice number or by row label."""
+def type_in(folder, marks, column="paid on", *, extra_rows=(), encoding="utf-8"):
+    """Type into a summary.csv column, keyed by invoice number or by row label."""
     path = folder.path / "invoices" / "summary.csv"
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
-    col = rows[0].index("paid on")
+    col = rows[0].index(column)
     for row in rows[1:]:
         key = row[2] or row[1] if len(row) > 2 else None
         if key in marks:
@@ -39,7 +40,7 @@ def by_invoice(folder):
 
 def test_paid_dates_carry_into_the_next_summary(folder):
     committed_then_cleared(folder)
-    mark_paid(folder, {"INV-0001": "2027-01-20", "INV-0004": "2027-01-25"},
+    type_in(folder, {"INV-0001": "2027-01-20", "INV-0004": "2027-01-25"},
               encoding="utf-8-sig")  # with the byte-order mark some editors add
     assert commit_run(folder, today=NEXT_MONTH) == EXIT_COMMITTED
     rows = by_invoice(folder)
@@ -50,7 +51,7 @@ def test_paid_dates_carry_into_the_next_summary(folder):
 
 def test_overdue_invoices_are_listed_until_marked_paid(folder, capsys):
     committed_then_cleared(folder)
-    mark_paid(folder, {"INV-0001": "2027-01-20"})
+    type_in(folder, {"INV-0001": "2027-01-20"})
     capsys.readouterr()
     assert commit_run(folder, answer="", today=date(2027, 3, 1)) == EXIT_DISCARDED
     out = capsys.readouterr().out
@@ -79,14 +80,14 @@ def test_nothing_is_overdue_within_its_terms(folder, capsys):
 ])
 def test_a_paid_on_date_that_cant_be_right_is_refused(folder, typed, error):
     committed_then_cleared(folder)
-    mark_paid(folder, {"INV-0001": typed})
+    type_in(folder, {"INV-0001": typed})
     _, errors = folder.check(NEXT_MONTH)
     assert errors == [error]
 
 
 def test_a_paid_on_date_on_a_total_row_is_refused(folder):
     committed_then_cleared(folder)
-    mark_paid(folder, {"Total": "2027-01-20"})
+    type_in(folder, {"Total": "2027-01-20"})
     _, errors = folder.check(NEXT_MONTH)
     assert errors[0] == ('summary.csv — line 4: paid on "2027-01-20" is in a row with no '
                          "invoice number. Put it on the invoice's own row.")
@@ -94,7 +95,7 @@ def test_a_paid_on_date_on_a_total_row_is_refused(folder):
 
 def test_a_paid_on_date_for_an_unknown_invoice_is_refused(folder):
     committed_then_cleared(folder)
-    mark_paid(folder, {}, extra_rows=[["2026-09", "Someone", "INV-0099", "2027-01",
+    type_in(folder, {}, extra_rows=[["2026-09", "Someone", "INV-0099", "2027-01",
                                        "2027-01-20"]])
     _, errors = folder.check(NEXT_MONTH)
     assert errors == ["summary.csv — paid on 2027-01-20 for INV-0099, which isn't in "
@@ -103,22 +104,22 @@ def test_a_paid_on_date_for_an_unknown_invoice_is_refused(folder):
 
 def test_an_invoice_paid_twice_is_refused(folder):
     committed_then_cleared(folder)
-    mark_paid(folder, {"INV-0001": "2027-01-20"},
+    type_in(folder, {"INV-0001": "2027-01-20"},
               extra_rows=[["2026-09", "Bluegum Theatre Company", "INV-0001", "2027-01",
                            "2027-01-21"]])
     _, errors = folder.check(NEXT_MONTH)
     assert len(errors) == 1 and "INV-0001 has a paid on date twice" in errors[0]
 
 
-def test_a_summary_from_before_the_paid_on_column_reads_as_nothing_paid(folder):
+def test_a_summary_from_before_the_columns_reads_as_nothing_typed(folder):
     (folder.path / "invoices" / "summary.csv").write_text("month,client,invoice\n")
     inputs, errors = folder.check()
-    assert errors == [] and inputs.paid == {}
+    assert errors == [] and inputs.paid == {} and inputs.set_aside == {}
 
 
 def test_a_summary_edited_while_the_drafts_are_open_is_kept(folder, capsys):
     committed_then_cleared(folder)
-    mark = lambda: mark_paid(folder, {"INV-0001": "2027-01-20"})  # noqa: E731
+    mark = lambda: type_in(folder, {"INV-0001": "2027-01-20"})  # noqa: E731
     assert commit_run(folder, today=NEXT_MONTH, during_prompt=mark) == EXIT_REFUSED
     assert "summary.csv — changed while the drafts were open" in capsys.readouterr().err
     assert by_invoice(folder)["INV-0001"]["paid on"] == "2027-01-20"
@@ -145,3 +146,58 @@ def test_a_set_aside_share_outside_0_to_1_is_refused(folder, line):
     _, errors = folder.load()
     assert errors == ["config.txt — tax_set_aside under [tax] must be a share like 0.3, "
                       "from 0 up to 1"]
+
+
+# ---- set aside notes ---------------------------------------------------------
+
+
+def test_set_aside_notes_carry_over_word_for_word(folder):
+    committed_then_cleared(folder)
+    note = 'super not paid yet, "back" in Dec'
+    type_in(folder, {"INV-0002": "2027-01-20"})
+    type_in(folder, {"INV-0002": note}, "set aside")
+    assert commit_run(folder, today=NEXT_MONTH) == EXIT_COMMITTED
+    assert by_invoice(folder)["INV-0002"]["set aside"] == note
+    assert by_invoice(folder)["INV-0001"]["set aside"] == ""
+
+
+def test_paid_invoices_not_marked_done_are_listed(folder, capsys):
+    committed_then_cleared(folder)
+    type_in(folder, {"INV-0001": "2027-01-15", "INV-0002": "2027-01-20",
+                     "INV-0003": "2027-01-25"})
+    type_in(folder, {"INV-0001": "Done 16 Jan", "INV-0002": "super not paid yet"},
+            "set aside")
+    capsys.readouterr()
+    commit_run(folder, answer="", today=NEXT_MONTH)
+    out = capsys.readouterr().out
+    # Done in any capitals drops off; unpaid invoices aren't listed at all.
+    assert ("\nPaid, still to set aside\n"
+            '  INV-0002  paid 20 January 2027    "super not paid yet"\n'
+            "  INV-0003  paid 25 January 2027\n\n") in out
+
+
+def test_nothing_to_set_aside_says_nothing(folder, capsys):
+    committed_then_cleared(folder)
+    type_in(folder, {"INV-0001": "2027-01-15"})
+    type_in(folder, {"INV-0001": "done"}, "set aside")
+    capsys.readouterr()
+    commit_run(folder, answer="", today=NEXT_MONTH)
+    assert "still to set aside" not in capsys.readouterr().out
+
+
+def test_a_set_aside_note_on_a_total_row_is_refused(folder):
+    committed_then_cleared(folder)
+    type_in(folder, {"Total": "done"}, "set aside")
+    _, errors = folder.check(NEXT_MONTH)
+    assert errors[0] == ('summary.csv — line 4: set aside "done" is in a row with no '
+                         "invoice number. Put it on the invoice's own row.")
+
+
+def test_a_set_aside_note_for_an_unknown_invoice_is_refused(folder):
+    committed_then_cleared(folder)
+    row = [""] * 15
+    row[2], row[-1] = "INV-0099", "done"
+    type_in(folder, {}, "set aside", extra_rows=[row])
+    _, errors = folder.check(NEXT_MONTH)
+    assert errors == ["summary.csv — a set aside note for INV-0099, which isn't in "
+                      "ledger.csv. Check the invoice number."]

@@ -64,9 +64,10 @@ If you have invoices from before the script, enter them as opening rows first
    everything.
 4. **Read what it shows you.** Finder opens a folder with the draft invoices and
    the new `summary.csv`. Terminal shows each invoice's total, sent invoices
-   that are overdue, any booked weeks that ran long or short, fixed-price hours
-   that charged nothing (check no balance was forgotten), and your turnover
-   against the GST threshold.
+   that are overdue, paid invoices you haven't finished setting money aside
+   from, any booked weeks that ran long or short, fixed-price hours that charged
+   nothing (check no balance was forgotten), and your turnover against the GST
+   threshold.
 5. **Type `commit`** to keep them, or anything else to throw them away. Closing the
    window also throws them away. Either way, the draft folder is deleted. Then press
    `r` to run again, or Enter to exit the script. After Enter, the window closes with
@@ -76,7 +77,8 @@ If you have invoices from before the script, enter them as opening rows first
 7. **Mark the rows as billed in Notion**, so they aren't pasted again next month.
 
 When a client pays, type the date into that invoice's `paid on` column in
-`summary.csv` (see below).
+`summary.csv`, and once you've moved its GST, tax and super, write `done` in its
+`set aside` column (see below).
    If the Terminal said some rows were **not sent**, paste `timesheet_not_sent.txt`
    back into Notion so they go out with a later invoice.
    If they are, the script refuses them as duplicates anyway.
@@ -197,7 +199,9 @@ invoice is a row, grouped by the month it covers, with:
 - its `GST`, all of which goes to the ATO with your BAS;
 - `tax set aside` and `super`: what to move out of it once paid, worked out from
   the invoice total at the shares set by `tax_set_aside` and `super_rate` under
-  `[tax]` in `config.txt`.
+  `[tax]` in `config.txt`;
+- `set aside`, a note you type in: anything you like, such as `super not paid
+  yet`, and `done` once its GST, tax and super are all moved.
 
 Because each invoice has its own figures, a late payment can be handled on its
 own when it arrives. Each month ends with a Total row adding up the same
@@ -210,13 +214,21 @@ counts them twice.
 it is, such as Modern CSV, rather than Numbers: Numbers saves a separate
 `.numbers` file and leaves the CSV unchanged. Type the date as `2026-11-12` in
 the invoice's `paid on` cell and save. Each commit rebuilds `summary.csv` from
-the ledger and carries those dates over, matched by invoice number. Anything
-else you type in it is not kept. Save and close it before running the script:
+the ledger and carries those dates over, matched by invoice number, along with
+your `set aside` notes, word for word. Anything else you type in it is not
+kept. Save and close it before running the script:
 a summary changed while the drafts are open stops the commit, so nothing you
 typed is lost. A date that isn't written like `2026-11-12`, falls before the
 invoice was issued or after today, or is on a row with no invoice number stops
 the run and names the line. An invoice past its payment terms with no `paid on`
 date is listed as overdue in every run.
+
+**Marking the money moved.** Every run also lists paid invoices whose `set
+aside` note doesn't start with `done`, with the note beside them, so a late
+payment or a job you parked keeps coming back until it's finished. `done` can be
+in any capitals and followed by anything, such as `Done 13 Nov`. A note typed
+on a Total row, or for an invoice that isn't in the ledger, stops the run, since
+it would otherwise be lost.
 
 ## What the client sees
 

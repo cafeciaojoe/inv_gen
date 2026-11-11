@@ -893,61 +893,81 @@ def load_ledger(base: Path, folder: Path, errors: list[str]) -> Ledger:
     return parse_ledger(raw, errors)
 
 
-# ---- summary.csv: the paid on dates -----------------------------------------
+# ---- summary.csv: what you type into it -------------------------------------
 
 PAID_ON = "paid on"
+SET_ASIDE = "set aside"  # free text; a note starting "done" means all moved
 
 
-def load_paid(folder: Path, errors: list[str]) -> tuple[dict[str, date], bytes | None]:
-    """The paid on dates typed into summary.csv, by invoice number, and the file.
+def load_marks(folder: Path, errors: list[str]
+               ) -> tuple[dict[str, date], dict[str, str], bytes | None]:
+    """The paid on dates and set aside notes typed into summary.csv, and the file.
 
-    summary.csv is rebuilt on every commit, so the dates are read first and
-    carried into the new one; nothing else typed there is kept. Columns are
-    found by their header, so rows sorted in an editor still match up.
+    Both are by invoice number. summary.csv is rebuilt on every commit, so
+    they are read first and carried into the new one; nothing else typed
+    there is kept. Columns are found by their header, so rows sorted in an
+    editor still match up, and a summary from before a column existed reads
+    as nothing typed in it.
     """
     try:
         raw = (folder / "summary.csv").read_bytes()
     except FileNotFoundError:
-        return {}, None
+        return {}, {}, None
     try:
         text = raw.decode("utf-8-sig")  # an editor may add a byte-order mark
     except UnicodeDecodeError:
         errors.append("summary.csv — not UTF-8 text. Save it as CSV (UTF-8).")
-        return {}, raw
+        return {}, {}, raw
     reader = csv.reader(io.StringIO(text, newline=""))
     header = [h.strip().casefold() for h in next(reader, [])]
-    if PAID_ON not in header:
-        return {}, raw  # written before the column existed
+    columns = {name: header.index(name) for name in (PAID_ON, SET_ASIDE) if name in header}
+    if not columns:
+        return {}, {}, raw
     if "invoice" not in header:
-        errors.append('summary.csv — the "invoice" column is missing, so the paid on dates '
+        errors.append('summary.csv — the "invoice" column is missing, so what you typed '
                       "can't be matched to invoices. Put the header row back.")
-        return {}, raw
-    at, col = header.index("invoice"), header.index(PAID_ON)
+        return {}, {}, raw
+    at = header.index("invoice")
     paid: dict[str, date] = {}
+    notes: dict[str, str] = {}
     for cells in reader:
         line = reader.line_num
-        value = cells[col].strip() if col < len(cells) else ""
-        if not value:
-            continue
         number = cells[at].strip() if at < len(cells) else ""
-        if not number:
-            errors.append(f'summary.csv — line {line}: paid on "{value}" is in a row with no '
-                          "invoice number. Put it on the invoice's own row.")
-            continue
-        try:
-            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-                raise ValueError
-            day = date.fromisoformat(value)
-        except ValueError:
-            errors.append(f'summary.csv — line {line}: paid on "{value}" for {number} isn\'t '
-                          "a date like 2026-11-12")
-            continue
-        if number in paid:
-            errors.append(f"summary.csv — line {line}: {number} has a paid on date twice. "
-                          "Keep one.")
-            continue
-        paid[number] = day
-    return paid, raw
+        for name, col in columns.items():
+            value = cells[col].strip() if col < len(cells) else ""
+            if not value:
+                continue
+            if not number:
+                # Rows without one are rebuilt, so this would be lost.
+                errors.append(f'summary.csv — line {line}: {name} "{value}" is in a row with '
+                              "no invoice number. Put it on the invoice's own row.")
+                continue
+            if name == SET_ASIDE:
+                if number in notes:
+                    errors.append(f"summary.csv — line {line}: {number} has a set aside note "
+                                  "twice. Keep one.")
+                else:
+                    notes[number] = value
+                continue
+            try:
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                    raise ValueError
+                day = date.fromisoformat(value)
+            except ValueError:
+                errors.append(f'summary.csv — line {line}: paid on "{value}" for {number} '
+                              "isn't a date like 2026-11-12")
+                continue
+            if number in paid:
+                errors.append(f"summary.csv — line {line}: {number} has a paid on date twice. "
+                              "Keep one.")
+                continue
+            paid[number] = day
+    return paid, notes, raw
+
+
+def set_aside_done(note: str) -> bool:
+    """A set aside note starting "done", in any capitals, means it's all moved."""
+    return note.strip().casefold().startswith("done")
 
 
 # ---- All inputs -------------------------------------------------------------
@@ -964,6 +984,7 @@ class Inputs:
     relative_as_of: date | None = None  # set when Notion's relative dates were read
     paid: dict[str, date] = field(default_factory=dict)  # from summary.csv's paid on
     summary_raw: bytes | None = None  # summary.csv as read, to catch edits mid-run
+    set_aside: dict[str, str] = field(default_factory=dict)  # summary.csv's set aside notes
 
 
 def load_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
@@ -979,11 +1000,12 @@ def load_inputs(base: Path, today: date, errors: list[str]) -> Inputs | None:
     rates = load_rates(base, errors)
     entries, header, relative_as_of = load_timesheet(base, errors)
     ledger = load_ledger(base, config.invoices_dir, errors) if config else None
-    paid, summary_raw = load_paid(config.invoices_dir, errors) if config else ({}, None)
+    paid, notes, summary_raw = (load_marks(config.invoices_dir, errors) if config
+                                else ({}, {}, None))
     if errors:
         return None
     return Inputs(config, tuple(clients), rates, tuple(entries), ledger, header, relative_as_of,
-                  paid, summary_raw)
+                  paid=paid, summary_raw=summary_raw, set_aside=notes)
 
 
 # ---- Cross-file checks ------------------------------------------------------
@@ -1112,6 +1134,9 @@ def validate(inputs: Inputs, errors: list[str]) -> None:
         elif day > config.invoice_date:
             errors.append(f"summary.csv — {number} is paid on {day.isoformat()}, after this "
                           f"run's invoice date ({config.invoice_date.isoformat()})")
+    for number in sorted(set(inputs.set_aside) - set(issued)):
+        errors.append(f"summary.csv — a set aside note for {number}, which isn't in "
+                      "ledger.csv. Check the invoice number.")
 
     for number in odd:
         hint = ("" if number.startswith(prefix) else
@@ -1663,6 +1688,18 @@ def preview_summary(inputs: Inputs, batch: Batch, preview: Path) -> list[str]:
             out.append(f"  {number:<{nw}}  {cs[0].client:<{cw}}  due {long_date(due):<17}  "
                        f"{cs[0].currency} {owed:>12,.2f}")
 
+    # Paid invoices whose set aside note doesn't start "done", however late the
+    # payment came, with the note so a parked job says why.
+    to_move = sorted((day, number) for number, day in inputs.paid.items()
+                     if not set_aside_done(inputs.set_aside.get(number, "")))
+    if to_move:
+        nw = max(len(number) for _, number in to_move)
+        out += ["", "Paid, still to set aside"]
+        for day, number in to_move:
+            note = inputs.set_aside.get(number)
+            line = f"  {number:<{nw}}  paid {long_date(day):<17}"
+            out.append(f'{line}  "{note}"' if note else line.rstrip())
+
     # A reminder of what the work log will show, for the kinds of row in this run.
     kinds = [k for k in ("fixed price", "week rate")
              if any(e.billing == k for inv in batch.invoices for e in inv.entries)]
@@ -1854,7 +1891,8 @@ class SummaryInvoice:
     to_super: Decimal  # to move into super, from the total ex GST
 
 
-def summary_rows(ledger: Ledger, config: Config, paid: dict[str, date]) -> list[list[str]]:
+def summary_rows(ledger: Ledger, config: Config, paid: dict[str, date],
+                 notes: dict[str, str]) -> list[list[str]]:
     """summary.csv: every invoice, grouped by the month it covers, all in AUD.
 
     It is for reading, not for sums. Each invoice row has the day it was
@@ -1862,8 +1900,9 @@ def summary_rows(ledger: Ledger, config: Config, paid: dict[str, date]) -> list[
     (every hour on it, charged or not); its amount ex GST split by billing
     type, and its invoice total; its GST; and what to put aside from it for
     tax and for super, at the shares set in config.txt, so a late payment
-    can be dealt with on its own. Each month ends with a Total row adding up
-    the same columns, then a blank row. Last come the financial year to date,
+    can be dealt with on its own. Last on the row is the set aside note, free
+    text typed in by hand and carried over like the paid on date. Each month
+    ends with a Total row adding up the same columns, then a blank row. Last come the financial year to date,
     in the same columns, and the rolling 12 months that count toward GST
     registration, both as of the run's invoice date.
     """
@@ -1913,20 +1952,21 @@ def summary_rows(ledger: Ledger, config: Config, paid: dict[str, date]) -> list[
 
     names = [name for _, name in SUMMARY_TYPES]
     header = ["month", "client", "invoice", "invoiced", PAID_ON, "hours", *names,
-              "invoice total", "GST", "tax set aside", "super"]
+              "invoice total", "GST", "tax set aside", "super", SET_ASIDE]
     out = [header]
     for month in sorted({i.month for i in invoices}):
         group = [i for i in invoices if i.month == month]
         out += [[month, i.client, i.number, i.invoiced,
-                 i.paid_on.isoformat() if i.paid_on else "", *figures([i])]
+                 i.paid_on.isoformat() if i.paid_on else "", *figures([i]),
+                 notes.get(i.number, "")]
                 for i in group]
-        out.append([month, "Total", "", "", "", *figures(group)])
+        out.append([month, "Total", "", "", "", *figures(group), ""])
         out.append([])
 
     fy = financial_year_start(end)
     this_year = [i for i in invoices if f"{fy:%Y-%m}" <= i.month <= f"{end:%Y-%m}"]
     label = f"Financial year {fy.year}–{(fy.year + 1) % 100:02d} to date"
-    out.append([label, "", "", "", "", *figures(this_year)])
+    out.append([label, "", "", "", "", *figures(this_year), ""])
     rolling = [""] * len(header)
     rolling[0] = f"Rolling 12 months to {end.isoformat()} (GST turnover)"
     rolling[header.index("invoice total")] = f"{rolling_turnover(ledger, None, end):.2f}"
@@ -1951,7 +1991,8 @@ def appended_ledger(inputs: Inputs, batch: Batch) -> tuple[bytes, list[list[str]
 def summary_after(inputs: Inputs, batch: Batch) -> bytes:
     """summary.csv as it will be after this commit, built for the preview."""
     new_ledger, _ = appended_ledger(inputs, batch)
-    rows = summary_rows(parse_ledger(new_ledger, []), inputs.config, inputs.paid)
+    rows = summary_rows(parse_ledger(new_ledger, []), inputs.config, inputs.paid,
+                        inputs.set_aside)
     return csv_text(rows).encode("utf-8")
 
 
