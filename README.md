@@ -201,7 +201,10 @@ invoice is a row, grouped by the month it covers, with:
   the invoice total at the shares set by `tax_set_aside` and `super_rate` under
   `[tax]` in `config.txt`;
 - `set aside`, a note you type in: anything you like, such as `super not paid
-  yet`, and `done` once its GST, tax and super are all moved.
+  yet`, and `done` once its GST, tax and super are all moved;
+- `salary`: what's left for your spending account once it's paid, the invoice
+  total less tax and super. The GST paid on top goes to the ATO, so it's left
+  out too.
 
 Because each invoice has its own figures, a late payment can be handled on its
 own when it arrives. Each month ends with a Total row adding up the same

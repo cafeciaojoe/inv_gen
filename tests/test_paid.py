@@ -133,6 +133,9 @@ def test_gst_is_shown_and_owed_includes_it(folder):
     assert rows["INV-0004"]["GST"] == ""  # Fjordlight is abroad: GST-free
     # Tax and super come from the amount before GST.
     assert (rows["INV-0001"]["tax set aside"], rows["INV-0001"]["super"]) == ("117.00", "39.00")
+    # Salary leaves out the GST as well as tax and super:
+    # of the 429.00 paid, 39.00 is GST, so 429.00 - 39.00 - 117.00 - 39.00.
+    assert rows["INV-0001"]["salary"] == "234.00"
     # The month's Total row adds up the same columns.
     september = next(r for r in summary_table(folder)
                      if r["month"] == "2026-09" and r["client"] == "Total")
@@ -195,8 +198,10 @@ def test_a_set_aside_note_on_a_total_row_is_refused(folder):
 
 def test_a_set_aside_note_for_an_unknown_invoice_is_refused(folder):
     committed_then_cleared(folder)
-    row = [""] * 15
-    row[2], row[-1] = "INV-0099", "done"
+    with open(folder.path / "invoices" / "summary.csv", newline="") as f:
+        header = next(csv.reader(f))
+    row = [""] * len(header)
+    row[header.index("invoice")], row[header.index("set aside")] = "INV-0099", "done"
     type_in(folder, {}, "set aside", extra_rows=[row])
     _, errors = folder.check(NEXT_MONTH)
     assert errors == ["summary.csv — a set aside note for INV-0099, which isn't in "

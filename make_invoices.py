@@ -1898,13 +1898,16 @@ def summary_rows(ledger: Ledger, config: Config, paid: dict[str, date],
     It is for reading, not for sums. Each invoice row has the day it was
     paid, typed in by hand and carried over from the last summary; its hours
     (every hour on it, charged or not); its amount ex GST split by billing
-    type, and its invoice total; its GST; and what to put aside from it for
-    tax and for super, at the shares set in config.txt, so a late payment
-    can be dealt with on its own. Last on the row is the set aside note, free
-    text typed in by hand and carried over like the paid on date. Each month
-    ends with a Total row adding up the same columns, then a blank row. Last come the financial year to date,
-    in the same columns, and the rolling 12 months that count toward GST
-    registration, both as of the run's invoice date.
+    type, and its invoice total; its GST; what to put aside from it for tax
+    and for super, at the shares set in config.txt, so a late payment can be
+    dealt with on its own; the set aside note, typed in by hand and carried
+    over like the paid on date; and last, the salary: what's left for the
+    spending account, the invoice total less tax and super, since the GST
+    paid on top of it is the ATO's.
+    Each month ends with a Total row adding up the same columns, then a
+    blank row. Last come the financial year to date, in the same columns,
+    and the rolling 12 months that count toward GST registration, both as
+    of the run's invoice date.
     """
     end = config.invoice_date
     hours: dict[str, Decimal] = {}
@@ -1950,23 +1953,26 @@ def summary_rows(ledger: Ledger, config: Config, paid: dict[str, date],
                 f"{add(i.total for i in group):.2f}", money(add(i.gst for i in group)),
                 money(add(i.tax for i in group)), money(add(i.to_super for i in group))]
 
+    def salary(group: list[SummaryInvoice]) -> str:
+        return money(add(i.total - i.tax - i.to_super for i in group))
+
     names = [name for _, name in SUMMARY_TYPES]
     header = ["month", "client", "invoice", "invoiced", PAID_ON, "hours", *names,
-              "invoice total", "GST", "tax set aside", "super", SET_ASIDE]
+              "invoice total", "GST", "tax set aside", "super", SET_ASIDE, "salary"]
     out = [header]
     for month in sorted({i.month for i in invoices}):
         group = [i for i in invoices if i.month == month]
         out += [[month, i.client, i.number, i.invoiced,
                  i.paid_on.isoformat() if i.paid_on else "", *figures([i]),
-                 notes.get(i.number, "")]
+                 notes.get(i.number, ""), salary([i])]
                 for i in group]
-        out.append([month, "Total", "", "", "", *figures(group), ""])
+        out.append([month, "Total", "", "", "", *figures(group), "", salary(group)])
         out.append([])
 
     fy = financial_year_start(end)
     this_year = [i for i in invoices if f"{fy:%Y-%m}" <= i.month <= f"{end:%Y-%m}"]
     label = f"Financial year {fy.year}–{(fy.year + 1) % 100:02d} to date"
-    out.append([label, "", "", "", "", *figures(this_year), ""])
+    out.append([label, "", "", "", "", *figures(this_year), "", salary(this_year)])
     rolling = [""] * len(header)
     rolling[0] = f"Rolling 12 months to {end.isoformat()} (GST turnover)"
     rolling[header.index("invoice total")] = f"{rolling_turnover(ledger, None, end):.2f}"
